@@ -1,0 +1,158 @@
+#!/bin/bash
+# codex-autocontinue — developer control script.
+# install/uninstall registers the watcher with launchd and puts this
+# command on PATH; start/stop/status/logs manage the running watcher.
+set -euo pipefail
+
+LABEL="com.qukai.codex-autocontinue"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+BIN_DIR="$HOME/.local/bin"
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+REPO="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+DAEMON="$REPO/codex-autocontinue.py"
+LOG="$REPO/watcher.log"
+
+ensure_on_path() {
+    if command -v codex-autocontinue >/dev/null 2>&1; then
+        echo "on PATH: $(command -v codex-autocontinue)"
+        return
+    fi
+    local shell_name rc
+    shell_name="$(basename "$(dscl . -read "/Users/$USER" UserShell 2>/dev/null | awk '{print $2}')")"
+    case "$shell_name" in
+        zsh)  rc="$HOME/.zshrc" ;;
+        bash) rc="$HOME/.bash_profile" ;;
+        fish) rc="$HOME/.config/fish/config.fish" ;;
+        *)
+            echo "add this to your shell startup file manually:"
+            echo '  export PATH="$HOME/.local/bin:$PATH"'
+            return
+            ;;
+    esac
+    mkdir -p "$(dirname "$rc")"
+    touch "$rc"
+    if ! grep -q '.local/bin' "$rc"; then
+        if [ "$shell_name" = fish ]; then
+            echo 'fish_add_path $HOME/.local/bin' >> "$rc"
+        else
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc"
+        fi
+        echo "added ~/.local/bin to PATH in $rc (open a new shell to pick it up)"
+    else
+        echo "~/.local/bin already in $rc; open a new shell to pick it up"
+    fi
+}
+
+cmd_install() {
+    mkdir -p "$BIN_DIR"
+    ln -sf "$REPO/codex-autocontinue" "$BIN_DIR/codex-autocontinue"
+    echo "linked: $BIN_DIR/codex-autocontinue -> $REPO/codex-autocontinue"
+
+    mkdir -p "$HOME/Library/LaunchAgents"
+    cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$LABEL</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>$DAEMON</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>$LOG</string>
+    <key>StandardErrorPath</key>
+    <string>$LOG</string>
+</dict>
+</plist>
+EOF
+    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" "$PLIST"
+    echo "launchd agent installed and started: $LABEL"
+
+    ensure_on_path
+
+    local dry
+    dry="$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dry_run"])' "$REPO/config.json")"
+    echo ""
+    echo "dry_run is $dry (see $REPO/config.json)"
+    if [ "$dry" = "True" ]; then
+        echo "the watcher will detect events and log what it WOULD do, injecting nothing."
+        echo "set \"dry_run\": false in config.json and run: codex-autocontinue start"
+    fi
+    echo ""
+    echo "one-time permissions (prompted on first real injection):"
+    echo "  - Automation: allow controlling iTerm2 / Terminal / System Events"
+    echo "  - Accessibility: System Settings -> Privacy & Security -> Accessibility"
+    echo "    (needed for the CodexManager desktop app and keystroke fallback)"
+}
+
+cmd_uninstall() {
+    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+    rm -f "$PLIST"
+    rm -f "$BIN_DIR/codex-autocontinue"
+    echo "uninstalled: launchd agent removed, PATH symlink removed."
+    echo "repo left in place at $REPO (delete manually if unwanted)."
+}
+
+cmd_start() {
+    if [ ! -f "$PLIST" ]; then
+        echo "not installed; run: codex-autocontinue install" >&2
+        exit 1
+    fi
+    launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || true
+    launchctl kickstart -k "gui/$(id -u)/$LABEL"
+    echo "started"
+}
+
+cmd_stop() {
+    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null && echo "stopped" || echo "not running"
+    echo "(still installed; will start again at login — 'start' to resume now)"
+}
+
+cmd_status() {
+    if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
+        local pid
+        pid="$(launchctl print "gui/$(id -u)/$LABEL" | awk '$1 == "pid" {print $3; exit}')"
+        echo "running (pid ${pid:-?})"
+    else
+        echo "not running"
+    fi
+    if [ -f "$LOG" ]; then
+        local n
+        n="$(grep -c 'auto-continue injected' "$LOG" || true)"
+        echo "auto-continues so far: $n"
+        echo "last log lines:"
+        tail -n 3 "$LOG" | sed 's/^/  /'
+    fi
+}
+
+cmd_logs() {
+    touch "$LOG"
+    tail -n 50 -f "$LOG"
+}
+
+case "${1:-}" in
+    install)   cmd_install ;;
+    uninstall) cmd_uninstall ;;
+    start)     cmd_start ;;
+    stop)      cmd_stop ;;
+    status)    cmd_status ;;
+    logs)      cmd_logs ;;
+    *)
+        echo "usage: codex-autocontinue {install|uninstall|start|stop|status|logs}" >&2
+        exit 1
+        ;;
+esac
