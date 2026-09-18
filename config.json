@@ -4,7 +4,7 @@
     "poll_interval_seconds": 2,
     "per_thread_cooldown_seconds": 60,
     "max_continues_per_hour": 20,
-    "dry_run": true,
+    "dry_run": false,
     "desktop_app_name": "CodexManager",
     "inject_cli": true,
     "inject_app": true,
