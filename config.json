@@ -7,5 +7,9 @@
     "dry_run": true,
     "desktop_app_name": "CodexManager",
     "inject_cli": true,
-    "inject_app": true
+    "inject_app": true,
+    "use_tmux": true,
+    "use_applescript": true,
+    "use_xdotool": true,
+    "use_ydotool": true
 }
