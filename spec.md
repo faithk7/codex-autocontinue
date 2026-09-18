@@ -18,6 +18,22 @@ The user never has to type `continue` manually again.
 - **Dry-run mode**: can run in "log only" mode that reports what it *would* do without doing it.
 - **Always on**: starts at login and restarts automatically if it crashes.
 
+## Developer interface
+
+A single wrapper script in the repo; developers never touch launchd directly:
+
+```
+./codex-autocontinue install      # one-time: registers with launchd, starts it, prints permission steps
+./codex-autocontinue uninstall    # stops and fully removes (nothing left behind)
+./codex-autocontinue start        # start (or restart) the watcher
+./codex-autocontinue stop         # stop it (still installed, starts again at login)
+./codex-autocontinue status       # running? pid, uptime, auto-continue count
+./codex-autocontinue logs         # tail the watcher log
+```
+
+- `install` and `uninstall` are exact opposites; reinstalling is always clean.
+- No brew, no pip, no sudo — everything lives in `~/Library/LaunchAgents` + the repo.
+
 ## Requirements
 
 **Functional**
