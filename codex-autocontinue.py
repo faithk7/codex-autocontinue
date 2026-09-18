@@ -28,7 +28,7 @@ LOGS_DB = os.path.join(CODEX_DIR, "logs_2.sqlite")
 DEFAULTS = {
     "phrase": "model is at capacity",
     "reply": "continue",
-    "poll_interval_seconds": 2,
+    "poll_interval_seconds": 0.5,
     "per_thread_cooldown_seconds": 60,
     "max_continues_per_hour": 20,
     "dry_run": True,
