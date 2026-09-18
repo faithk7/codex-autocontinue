@@ -25,12 +25,14 @@ CONFIG_PATH = os.path.join(REPO, "config.json")
 LOG_PATH = os.path.join(REPO, "watcher.log")
 CODEX_DIR = str(Path.home() / ".codex")
 LOGS_DB = os.path.join(CODEX_DIR, "logs_2.sqlite")
+QUEUE_DB = os.path.join(CODEX_DIR, "queue_1.sqlite")
 
 DEFAULTS = {
     "phrase": "model is at capacity",
     "reply": "continue",
     "poll_interval_seconds": 0.25,
     "response_delay_seconds": 1.0,
+    "skip_when_queued": True,
     "per_thread_cooldown_seconds": 60,
     "max_continues_per_hour": 20,
     "dry_run": True,
@@ -153,6 +155,12 @@ def handle_capacity(cfg, injector, limiter, row, dry_run):
     if delay > 0:
         time.sleep(delay * random.uniform(0.75, 1.25))
 
+    if cfg.get("skip_when_queued", True):
+        n = queued_count(QUEUE_DB, thread_id)
+        if n > 0:
+            log("skip %s: %d queued message(s) will drive the session" % (plan, n))
+            return
+
     if surface == "cli":
         method = (
             injector.inject_cli(pid, tty, cfg["reply"]) if cfg["inject_cli"] else None
@@ -168,6 +176,23 @@ def handle_capacity(cfg, injector, limiter, row, dry_run):
 
 def open_db():
     return sqlite3.connect("file:%s?mode=ro" % LOGS_DB, uri=True)
+
+
+def queued_count(db_path, thread_id):
+    """How many stacked messages this thread has; 0 when unknown."""
+    if not os.path.exists(db_path):
+        return 0
+    try:
+        conn = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
+        try:
+            return conn.execute(
+                "SELECT COUNT(*) FROM queued_items WHERE thread_id = ?",
+                (thread_id,),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return 0
 
 
 def max_row_id(conn):

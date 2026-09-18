@@ -19,6 +19,7 @@ The user never has to type `continue` manually again.
 - **Graceful degradation**: when no injector is available on a platform, the tool still detects events and logs "type continue yourself" instead of failing.
 - **Silent operation**: runs invisibly in the background — no notifications, no UI, no window focus stealing when avoidable. The only trace is a log file recording what it did and when.
 - **Safety limits**: cooldown per session and a global hourly cap so it can never spam input; configurable via a config file.
+- **Queue-aware**: if the session already has stacked (queued) messages, it stays quiet and lets them drive the session.
 - **Dry-run mode**: can run in "log only" mode that reports what it *would* do without doing it.
 - **Always on**: starts at login and restarts automatically if it crashes.
 
