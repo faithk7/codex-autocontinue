@@ -34,6 +34,12 @@ A single wrapper script in the repo; developers never touch launchd directly:
 - `install` and `uninstall` are exact opposites; reinstalling is always clean.
 - No brew, no pip, no sudo — everything lives in `~/Library/LaunchAgents` + the repo.
 
+## PATH setup
+
+- `install` symlinks the wrapper to `~/.local/bin/codex-autocontinue` (already on PATH on this machine), so the command works from any directory: `codex-autocontinue start`.
+- `uninstall` removes the symlink.
+- If `~/.local/bin` is not on PATH, `install` prints the one-line export to add to `.zshrc` instead.
+
 ## Requirements
 
 **Functional**
