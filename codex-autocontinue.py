@@ -11,6 +11,7 @@ import argparse
 import glob
 import json
 import os
+import random
 import sqlite3
 import sys
 import time
@@ -28,7 +29,8 @@ LOGS_DB = os.path.join(CODEX_DIR, "logs_2.sqlite")
 DEFAULTS = {
     "phrase": "model is at capacity",
     "reply": "continue",
-    "poll_interval_seconds": 0.5,
+    "poll_interval_seconds": 0.25,
+    "response_delay_seconds": 1.0,
     "per_thread_cooldown_seconds": 60,
     "max_continues_per_hour": 20,
     "dry_run": True,
@@ -146,6 +148,10 @@ def handle_capacity(cfg, injector, limiter, row, dry_run):
     if not ok:
         log("skip %s: %s" % (plan, reason))
         return
+
+    delay = cfg.get("response_delay_seconds", 0)
+    if delay > 0:
+        time.sleep(delay * random.uniform(0.75, 1.25))
 
     if surface == "cli":
         method = (

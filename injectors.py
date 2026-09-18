@@ -64,6 +64,7 @@ ITERM_SCRIPT = """
 on run argv
     set theTty to item 1 of argv
     set theText to item 2 of argv
+    if not (application "iTerm2" is running) then return "not-running"
     tell application "iTerm2"
         repeat with w in windows
             repeat with t in tabs of w
@@ -84,6 +85,7 @@ TERMINAL_SCRIPT = """
 on run argv
     set theTty to item 1 of argv
     set theText to item 2 of argv
+    if not (application "Terminal" is running) then return "not-running"
     tell application "Terminal"
         repeat with w in windows
             repeat with t in tabs of w
@@ -102,6 +104,7 @@ APP_SCRIPT = """
 on run argv
     set appName to item 1 of argv
     set theText to item 2 of argv
+    if not (application appName is running) then return "not-running"
     tell application appName to activate
     delay 0.5
     tell application "System Events"
@@ -121,12 +124,6 @@ class MacInjector:
     def __init__(self, cfg):
         self.cfg = cfg
 
-    def _app_running(self, name):
-        rc, out, _ = osascript(
-            'tell application "System Events" to return (name of processes) contains "%s"' % name
-        )
-        return rc == 0 and out == "true"
-
     def inject_cli(self, pid, tty, reply):
         if self.cfg.get("use_tmux", True):
             method = tmux_inject(tty, reply)
@@ -134,20 +131,16 @@ class MacInjector:
                 return method
         if not tty or not self.cfg.get("use_applescript", True):
             return None
-        if self._app_running("iTerm2"):
-            rc, out, _ = osascript(ITERM_SCRIPT, tty, reply + "\n")
-            if out == "ok":
-                return "iterm2-write"
-        if self._app_running("Terminal"):
-            rc, out, _ = osascript(TERMINAL_SCRIPT, tty, reply)
-            if out == "ok":
-                return "terminal-doscript"
+        rc, out, _ = osascript(ITERM_SCRIPT, tty, reply + "\n")
+        if out == "ok":
+            return "iterm2-write"
+        rc, out, _ = osascript(TERMINAL_SCRIPT, tty, reply)
+        if out == "ok":
+            return "terminal-doscript"
         return None
 
     def inject_app(self, reply):
         app = self.cfg["desktop_app_name"]
-        if not self._app_running(app):
-            return None
         rc, out, _ = osascript(APP_SCRIPT, app, reply)
         return "app-keystroke" if rc == 0 and out == "ok" else None
 

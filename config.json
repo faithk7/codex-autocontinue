@@ -1,7 +1,8 @@
 {
     "phrase": "model is at capacity",
     "reply": "continue",
-    "poll_interval_seconds": 0.5,
+    "poll_interval_seconds": 0.25,
+    "response_delay_seconds": 1.0,
     "per_thread_cooldown_seconds": 60,
     "max_continues_per_hour": 20,
     "dry_run": false,
