@@ -38,7 +38,8 @@ A single wrapper script in the repo; developers never touch launchd directly:
 
 - `install` symlinks the wrapper to `~/.local/bin/codex-autocontinue` (already on PATH on this machine), so the command works from any directory: `codex-autocontinue start`.
 - `uninstall` removes the symlink.
-- If `~/.local/bin` is not on PATH, `install` prints the one-line export to add to `.zshrc` instead.
+- If `~/.local/bin` is not on PATH, `install` detects the user's login shell and appends the export to the right startup file (`~/.zshrc`, `~/.bash_profile`, `~/.config/fish/config.fish`), creating the file if it does not exist. For unrecognized shells it prints the line to add manually.
+- Either way, `install` verifies the command is on PATH afterwards and says so.
 
 ## Requirements
 
