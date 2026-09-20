@@ -50,9 +50,15 @@ def load_config():
     cfg = dict(DEFAULTS)
     try:
         with open(CONFIG_PATH) as f:
-            cfg.update(json.load(f))
+            loaded = json.load(f)
+        if isinstance(loaded, dict):
+            cfg.update(loaded)
+        else:
+            log("WARNING: %s is not a JSON object; using defaults" % CONFIG_PATH)
     except FileNotFoundError:
         pass
+    except (ValueError, OSError) as e:
+        log("WARNING: corrupt %s (%s); using defaults" % (CONFIG_PATH, e))
     return cfg
 
 
@@ -140,7 +146,7 @@ def handle_capacity(cfg, injector, limiter, row, dry_run):
             log("skip %s: codex process/tty not found" % plan)
             return
     else:
-        plan += " app=%s" % cfg["desktop_app_name"]
+        plan += " app=%s" % cfg.get("desktop_app_name", "CodexManager")
 
     if dry_run:
         log("DRY-RUN would inject %r -> %s" % (cfg["reply"], plan), console=True)
@@ -176,6 +182,19 @@ def handle_capacity(cfg, injector, limiter, row, dry_run):
 
 def open_db():
     return sqlite3.connect("file:%s?mode=ro" % LOGS_DB, uri=True)
+
+
+def wait_for_db(interval):
+    """Block until the codex log DB exists (fresh machines: codex never ran)."""
+    while not os.path.exists(LOGS_DB):
+        log("waiting for %s (run codex once to create it)" % LOGS_DB)
+        time.sleep(max(interval, 5))
+    try:
+        return open_db()
+    except sqlite3.Error as e:
+        log("cannot open %s (%s); retrying" % (LOGS_DB, e))
+        time.sleep(max(interval, 5))
+        return wait_for_db(interval)
 
 
 def queued_count(db_path, thread_id):
@@ -224,7 +243,11 @@ def latest_capacity_row(conn, phrase, thread_id):
 
 
 def cmd_simulate(cfg, injector, thread_id):
-    conn = open_db()
+    try:
+        conn = open_db()
+    except sqlite3.Error as e:
+        print("no codex log database yet at %s (%s)" % (LOGS_DB, e))
+        return 1
     row = latest_capacity_row(conn, cfg["phrase"], thread_id)
     if not row:
         print("no capacity event found in %s" % LOGS_DB)
@@ -235,14 +258,24 @@ def cmd_simulate(cfg, injector, thread_id):
 
 
 def cmd_watch(cfg, injector, dry_run, once):
-    conn = open_db()
+    interval = cfg["poll_interval_seconds"]
+    try:
+        interval = float(interval)
+    except (TypeError, ValueError):
+        interval = None
+    if not interval or interval <= 0:
+        log(
+            "WARNING: poll_interval_seconds=%r invalid; using %s"
+            % (cfg["poll_interval_seconds"], DEFAULTS["poll_interval_seconds"])
+        )
+        interval = DEFAULTS["poll_interval_seconds"]
+    conn = wait_for_db(interval)
     last_id = max_row_id(conn)
     log(
         "watcher started (%s, %s, dry_run=%s, watermark id=%d, phrase=%r)"
         % (sys.platform, type(injector).__name__, dry_run, last_id, cfg["phrase"])
     )
     limiter = Limiter(cfg)
-    interval = cfg["poll_interval_seconds"]
     while True:
         for row in fetch_new(conn, last_id, cfg["phrase"]):
             last_id = max(last_id, row[0])

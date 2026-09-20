@@ -140,7 +140,7 @@ class MacInjector:
         return None
 
     def inject_app(self, reply):
-        app = self.cfg["desktop_app_name"]
+        app = self.cfg.get("desktop_app_name", "CodexManager")
         rc, out, _ = osascript(APP_SCRIPT, app, reply)
         return "app-keystroke" if rc == 0 and out == "ok" else None
 

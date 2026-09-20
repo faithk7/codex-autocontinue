@@ -48,10 +48,10 @@ Commands are identical on every platform (`./codex-autocontinue <command>` or `.
 
 ```
 install      one-time: register with the OS service manager, start, print permission steps
-uninstall    stop and fully remove (nothing left behind)
+uninstall    stop and remove the service + PATH symlink (see note below)
 start        start (or restart) the watcher
 stop         stop it (still installed, starts again at login)
-status       running? pid, uptime, auto-continue count
+status       running? pid, auto-continue count
 logs         tail the watcher log
 ```
 
@@ -59,6 +59,7 @@ Useful daemon flags (rarely needed directly):
 
 ```sh
 ./codex-autocontinue.py --dry-run        # log only, never inject
+./codex-autocontinue.py --no-dry-run     # inject for real (overrides config)
 ./codex-autocontinue.py --once           # single poll pass then exit
 ./codex-autocontinue.py --simulate [ID]  # print the injection plan for a thread
 ```
@@ -88,11 +89,34 @@ Edit `config.json` in the repo:
 ## Safety
 
 - Triggers only on the exact (configurable) capacity phrase.
-- Sends input to the exact session/window it belongs to — never an unrelated window.
+- Sends input to the exact session/window it belongs to — never an unrelated window (but see the ydotool / Windows caveats below).
 - Never acts on events logged before the watcher started.
 - Per-session cooldown + global hourly cap, so it can never spam input.
 - Queue-aware: stays silent when stacked messages will drive the session.
 - `dry_run` mode lets you watch what it would do before trusting it.
+
+## Robustness
+
+Bad config or a missing Codex install can never crash-loop the watcher:
+
+- Corrupt `config.json` (invalid JSON, wrong shape) → falls back to built-in defaults and logs a `WARNING`. If `config.json` is missing entirely, defaults apply with `dry_run: true` (fail-safe: detect-only until you configure it).
+- Missing `~/.codex/logs_2.sqlite` (fresh machine, Codex never ran) → the watcher logs `waiting for …` and retries instead of crashing; `--simulate` exits 1 with a one-line message.
+- Invalid `poll_interval_seconds` (zero, negative, non-numeric) → clamped to the default (0.25s) with a `WARNING`. Zero would otherwise spin at 100% CPU; negative would crash.
+- Missing `desktop_app_name` → defaults to `"CodexManager"`.
+
+## Known limitations
+
+Found during testing; documented here so there are no surprises:
+
+- **Session routing is CLI vs everything-else.** Any non-CLI rollout (VSCode extension, `exec`, subagents) is treated as a desktop-app session and answered with a keystroke into `desktop_app_name`. If you only want CLI coverage, set `"inject_app": false`.
+- **Linux/Wayland (ydotool) types into the focused window**, not a specific Codex window — keep the Codex terminal focused, or prefer tmux.
+- **Windows targets whichever `codex.exe` window activates first**, so with several CLI sessions the reply can land in the wrong one. Custom `reply` text containing `'` or SendKeys metacharacters (`+ ^ % ~ [ ] { }`) is not escaped — stick to plain words.
+- **Linux/X11 (xdotool) rarely matches**: it looks up the window by the `codex` child pid, but the window belongs to the terminal emulator. On X11, tmux is the reliable path; otherwise the tool stays detection-only.
+- **`--simulate THREAD_ID` shows the thread's latest log row even if that row is not a capacity event** — check the row id it reports. Bare `--simulate` (no id) does filter by the phrase.
+- **`--once` only sees rows written during its single pass** (it watermarks at startup), so it is a plumbing check, not a way to catch up on events.
+- **Interactive runs print to the console instead of `watcher.log`**; only service-managed runs append to the log. Conversely, `DRY-RUN` lines can appear twice in the log when running as a service (once via the file, once via captured stdout).
+- **`uninstall` removes the service and the PATH symlink but leaves the `~/.local/bin` line in your shell rc file and `watcher.log`** — delete those manually if you want zero trace.
+- `status` reports pid and the auto-continue count, but not uptime.
 
 ## Requirements
 

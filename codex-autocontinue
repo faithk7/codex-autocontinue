@@ -179,7 +179,7 @@ svc_status() {
 
 print_post_install_notes() {
     local dry
-    dry="$("$PYTHON3" -c 'import json,sys; print(json.load(open(sys.argv[1]))["dry_run"])' "$REPO/config.json")"
+    dry="$("$PYTHON3" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("dry_run", True))' "$REPO/config.json" 2>/dev/null || echo True)"
     echo ""
     echo "dry_run is $dry (see $REPO/config.json)"
     if [ "$dry" = "True" ]; then

@@ -45,7 +45,9 @@ switch ($Command) {
         Start-ScheduledTask -TaskName $TaskName
         Write-Host "scheduled task installed and started: $TaskName"
         Add-RepoToPath
-        $dry = (Get-Content (Join-Path $Repo "config.json") | ConvertFrom-Json).dry_run
+        $dry = $true
+        try { $dry = (Get-Content (Join-Path $Repo "config.json") -Raw | ConvertFrom-Json).dry_run } catch { $dry = $true }
+        if ($null -eq $dry) { $dry = $true }
         Write-Host ""
         Write-Host "dry_run is $dry (see $Repo\config.json)"
         if ($dry) {

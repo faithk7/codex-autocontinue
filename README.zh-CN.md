@@ -48,10 +48,10 @@ Windows（PowerShell）：
 
 ```
 install      一次性：注册到系统服务管理器、启动、打印授权步骤
-uninstall    停止并完全移除（不留任何残留）
+uninstall    停止并移除服务与 PATH 链接（见下文说明）
 start        启动（或重启）看守进程
 stop         停止（仍保持安装状态，下次登录时自动启动）
-status       查看运行状态：pid、运行时长、自动续聊次数
+status       查看运行状态：pid、自动续聊次数
 logs         查看看守日志
 ```
 
@@ -59,6 +59,7 @@ logs         查看看守日志
 
 ```sh
 ./codex-autocontinue.py --dry-run        # 只记录日志，不实际注入
+./codex-autocontinue.py --no-dry-run     # 实际注入（覆盖配置文件）
 ./codex-autocontinue.py --once           # 只轮询一次然后退出
 ./codex-autocontinue.py --simulate [ID]  # 打印某个线程的注入计划
 ```
@@ -88,11 +89,34 @@ logs         查看看守日志
 ## 安全机制
 
 - 只匹配精确的（可配置的）容量提示短语。
-- 只向事件所属的会话/窗口发送输入——绝不会误入无关窗口。
+- 只向事件所属的会话/窗口发送输入——绝不会误入无关窗口（但请注意下文 ydotool / Windows 的例外）。
 - 不处理看守进程启动之前的历史事件。
 - 单会话冷却 + 全局每小时上限，绝不刷屏。
 - 队列感知：会话已有排队消息时保持静默。
 - `dry_run` 模式可以先观察它"打算做什么"，确认可信后再开启注入。
+
+## 健壮性
+
+错误的配置或缺失的 Codex 安装都不会让看守进程崩溃循环：
+
+- `config.json` 损坏（非法 JSON、结构错误）→ 回退到内置默认值并记录 `WARNING`。如果 `config.json` 完全缺失，则使用默认值，其中 `dry_run: true`（故障保护：仅检测，直到你完成配置）。
+- 缺失 `~/.codex/logs_2.sqlite`（全新机器，从未运行过 Codex）→ 看守进程记录 `waiting for …` 并重试，而不是崩溃；`--simulate` 会打印一行提示并以状态码 1 退出。
+- 非法的 `poll_interval_seconds`（零、负数、非数字）→ 钳制到默认值（0.25 秒）并记录 `WARNING`。零值会导致 100% CPU 空转，负数会导致崩溃。
+- 缺失 `desktop_app_name` → 默认使用 `"CodexManager"`。
+
+## 已知限制
+
+测试中发现的问题，在此记录以免意外：
+
+- **会话路由只有"CLI / 其他"两种。** 任何非 CLI 会话（VSCode 插件、`exec`、subagent）都会被当作桌面应用会话，向 `desktop_app_name` 发送按键。如果你只想覆盖 CLI，请设置 `"inject_app": false`。
+- **Linux/Wayland（ydotool）向当前聚焦的窗口输入**，而非指定的 Codex 窗口——请保持 Codex 终端处于聚焦状态，或优先使用 tmux。
+- **Windows 上会向任意一个能激活的 `codex.exe` 窗口发送**，多会话时可能进错窗口。自定义 `reply` 若包含 `'` 或 SendKeys 元字符（`+ ^ % ~ [ ] { }`）不会被转义——请只用纯单词。
+- **Linux/X11（xdotool）通常匹配不到窗口**：它按 `codex` 子进程 pid 查找窗口，但窗口属于终端模拟器。在 X11 上可靠的方式是 tmux，否则只能停留在仅检测模式。
+- **`--simulate THREAD_ID` 会显示该线程的最新日志行，即使它不是容量事件**——请核对它报告的行 id。不带参数的 `--simulate` 会按短语过滤。
+- **`--once` 只能看到它那一轮轮询期间写入的行**（启动时即打水位），只适合检查链路是否通畅，不能用来补处理事件。
+- **交互式运行只打印到控制台，不写入 `watcher.log`**；只有服务托管运行时才会追加日志。反过来，以服务运行时 `DRY-RUN` 行可能在日志里出现两次（一次直接写文件，一次经由捕获的 stdout）。
+- **`uninstall` 只移除服务和 PATH 链接，shell 启动文件中的 `~/.local/bin` 行和 `watcher.log` 会保留**——如需彻底清除请手动删除。
+- `status` 显示 pid 和自动续聊次数，不显示运行时长。
 
 ## 依赖要求
 
