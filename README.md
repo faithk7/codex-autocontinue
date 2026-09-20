@@ -46,10 +46,10 @@ When no injector is available on a platform, the tool still detects events and l
 ### Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/bootstrap.sh | bash
 ```
 
-On Windows PowerShell, use `irm https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/install.ps1 | iex` instead.
+On Windows PowerShell, use `irm https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/bootstrap.ps1 | iex` instead.
 
 ### Verify
 
@@ -68,21 +68,25 @@ codex-autocontinue logs -n 20
 One line (macOS / Linux) — clones into `~/.codex-autocontinue` and installs:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/bootstrap.sh | bash
 ```
 
 One line (Windows PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/bootstrap.ps1 | iex
 ```
 
-Or clone the repo yourself and run the wrapper:
+Or clone the repo yourself and install that checkout:
 
 ```sh
-./codex-autocontinue install        # macOS / Linux
-.\codex-autocontinue.ps1 install    # Windows PowerShell
+git clone https://github.com/faithk7/codex-autocontinue.git
+cd codex-autocontinue
+./install.sh                 # macOS / Linux
+.\install.ps1                # Windows PowerShell
 ```
+
+To update later: `git pull` in your checkout, then re-run the install script (or `codex-autocontinue start` to restart on the new code). Re-running the one-liner above updates too.
 
 `install` is one-time: it registers the watcher with the OS service manager (launchd on macOS, `systemd --user` on Linux, Task Scheduler on Windows), starts it, puts the command on PATH, and prints any next steps. On macOS it also handles Automation/Accessibility approval in one guided flow — click Allow in the system dialogs when asked and install verifies each grant. It starts at login and restarts automatically if it crashes. No sudo, no brew, no pip.
 

@@ -46,10 +46,10 @@
 ### 安装
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/bootstrap.sh | bash
 ```
 
-Windows PowerShell 请改用 `irm https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/install.ps1 | iex`。
+Windows PowerShell 请改用 `irm https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/bootstrap.ps1 | iex`。
 
 ### 验证
 
@@ -68,21 +68,25 @@ codex-autocontinue logs -n 20
 一行命令（macOS / Linux）——克隆到 `~/.codex-autocontinue` 并完成安装：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/bootstrap.sh | bash
 ```
 
 一行命令（Windows PowerShell）：
 
 ```powershell
-irm https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/bootstrap.ps1 | iex
 ```
 
-也可以自己克隆仓库后运行包装脚本：
+也可以自己克隆仓库后安装该检出副本：
 
 ```sh
-./codex-autocontinue install        # macOS / Linux
-.\codex-autocontinue.ps1 install    # Windows PowerShell
+git clone https://github.com/faithk7/codex-autocontinue.git
+cd codex-autocontinue
+./install.sh                 # macOS / Linux
+.\install.ps1                # Windows PowerShell
 ```
+
+后续更新：在仓库目录执行 `git pull`，然后重新运行安装脚本（或执行 `codex-autocontinue start` 重启生效）。重新执行上面的一行命令同样可以更新。
 
 `install` 只需执行一次：它会将看守进程注册到系统服务管理器（macOS 用 launchd，Linux 用 `systemd --user`，Windows 用任务计划程序），立即启动，把命令加入 PATH，并打印后续步骤。在 macOS 上还会一步完成自动化/辅助功能的授权引导——按提示在系统弹窗中点按“允许”，安装程序会逐项验证授权结果。程序开机自启，崩溃后自动重启。无需 sudo、brew 或 pip。
 
