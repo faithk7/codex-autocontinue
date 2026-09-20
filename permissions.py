@@ -51,6 +51,9 @@ _TCC_NO_AUTOMATION = "-1743"
 _TCC_NO_ACCESSIBILITY = "-25211"
 # Synthetic returncode when a probe dialog sits unanswered past its timeout.
 _TIMEOUT_RC = 124
+# `open` normally returns in <0.1s; this bounds cold-launch hangs instead of
+# the 10s probe default (a timeout means the launch is already in flight).
+_OPEN_TIMEOUT = 1.5
 
 
 def _run(cmd: Sequence[str], timeout: float) -> CommandResult:
@@ -64,13 +67,28 @@ def _esc(s: str) -> str:
     return str(s).replace("\\", "\\\\").replace('"', '\\"')
 
 
+def apps_running(apps: Sequence[str]) -> dict[str, bool]:
+    """Prompt-free batch check: which apps are running, in one osascript spawn.
+
+    Same `application "X" is running` semantics as app_is_running (never
+    prompts/launches); unknown apps and probe failures report False.
+    """
+    if sys.platform != "darwin":
+        return {a: False for a in apps}
+    if not apps:
+        return {}
+    exprs = ", ".join(f'(application "{_esc(a)}" is running)' for a in apps)
+    rc, out, _ = _run(["osascript", "-e", f"return {{{exprs}}}"], 10)
+    if rc != 0:
+        return {a: False for a in apps}
+    vals = [v.strip().lower() == "true" for v in out.split(",")]
+    return {a: (vals[i] if i < len(vals) else False)
+            for i, a in enumerate(apps)}
+
+
 def app_is_running(app: str) -> bool:
     """Prompt-free check: never targets the app, so it never prompts/launches."""
-    if sys.platform != "darwin":
-        return False
-    rc, out, _ = _run(["osascript", "-e",
-                       f'application "{_esc(app)}" is running'], 10)
-    return rc == 0 and out == "true"
+    return apps_running([app]).get(app, False)
 
 
 def probe_automation(app: str, timeout: float | None = None) -> tuple[str, str]:
@@ -160,6 +178,23 @@ def summarize(state: dict[str, Any] | None) -> tuple[int, int, list[str]]:
     return granted, len(applicable), blocking
 
 
+def expected_targets(cfg: WatcherConfig) -> tuple[list[str], bool]:
+    """(automation target apps, whether the Accessibility keystroke probe applies).
+
+    Single source of truth for which dialogs priming will trigger; shared by
+    the daemon's prime_all and the CLI's guided walkthrough.
+    """
+    use_as = cfg.get("use_applescript", True)
+    inject_app = cfg.get("inject_app", True)
+    app_name = cfg.get("desktop_app_name", "CodexManager") or "CodexManager"
+    targets = ["System Events"]
+    if use_as:
+        targets += ["iTerm2", "Terminal"]
+    if inject_app and app_name not in targets:
+        targets.append(app_name)
+    return targets, inject_app
+
+
 def prime_all(cfg: WatcherConfig, log: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Run every applicable probe, saving state after each; returns state.
 
@@ -168,15 +203,7 @@ def prime_all(cfg: WatcherConfig, log: Callable[[str], None] | None = None) -> d
     daemon start ("until granted") while denied ones just re-fail silently.
     """
     say = log or (lambda m: None)
-    use_as = cfg.get("use_applescript", True)
-    inject_app = cfg.get("inject_app", True)
-    app_name = cfg.get("desktop_app_name", "CodexManager") or "CodexManager"
-
-    targets = ["System Events"]
-    if use_as:
-        targets += ["iTerm2", "Terminal"]
-    if inject_app and app_name not in targets:
-        targets.append(app_name)
+    targets, inject_app = expected_targets(cfg)
 
     state = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "targets": {}}
     for app in targets:
@@ -238,22 +265,25 @@ _FALLBACK_URLS = [
 
 
 def _open_best(urls: Sequence[str]) -> bool:
-    """Open the first reachable Settings URL; True when one opened."""
+    """Open the first reachable Settings URL; True when one opened.
+
+    A timeout means System Settings is mid-launch (the URL was handed off),
+    so it counts as delivered rather than cascading to the next URL.
+    """
     for url in urls:
-        rc, _, _ = _run(["open", url], 10)
-        if rc == 0:
+        rc, _, _ = _run(["open", url], _OPEN_TIMEOUT)
+        if rc == 0 or rc == _TIMEOUT_RC:
             return True
     return False
 
 
 def open_settings_panes() -> bool:
-    """Open the Automation + Accessibility panes (best effort, macOS only).
+    """Open the Accessibility pane (best effort, macOS only).
 
-    System Settings shows one pane at a time, so this lands on Accessibility
-    (the least discoverable); Automation is one click away in the sidebar.
-    Returns True if at least the final open succeeded.
+    System Settings shows one pane at a time, so a single navigation lands
+    on Accessibility (the least discoverable); Automation is one click away
+    in the sidebar. Returns True when an open succeeded.
     """
     if sys.platform != "darwin":
         return False
-    _open_best([_PRIVACY_URLS["automation"]] + _FALLBACK_URLS)
     return _open_best([_PRIVACY_URLS["accessibility"]] + _FALLBACK_URLS)

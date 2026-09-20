@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -621,6 +622,28 @@ def log_stats() -> tuple[int, str | None]:
 # ---- macOS permission flow (priming runs in the daemon; the CLI orchestrates) --
 
 
+def _watcher_identity() -> tuple[str, str]:
+    """(display name, full path) of the python running the watcher.
+
+    Prefers the live daemon process name (what Settings shows), falls back
+    to the installed plist entry, then to this process.
+    """
+    exe = sys.executable
+    if sys.platform == "darwin" and os.path.exists(PLIST):
+        rc, out, _ = run(["/usr/libexec/PlistBuddy", "-c",
+                          "Print :ProgramArguments:0", PLIST])
+        if rc == 0 and out:
+            exe = out
+    name = os.path.basename(os.path.realpath(exe))
+    if sys.platform == "darwin":
+        pid = service_pid()
+        if pid and pid != "?" and pid.isdigit():
+            rc, out, _ = run(["ps", "-o", "comm=", "-p", pid])
+            if rc == 0 and out:
+                name = os.path.basename(out.split()[0])
+    return name, exe
+
+
 def _perm_short(key: str) -> str:
     """Short display label for a permission target key."""
     if key.startswith("automation:"):
@@ -630,8 +653,31 @@ def _perm_short(key: str) -> str:
     return key
 
 
-def guided_prime() -> tuple[dict[str, Any] | None, bool]:
+def _read_key() -> str:
+    """Read one keypress without waiting for Enter (POSIX tty only).
+
+    Raises ImportError/OSError/ValueError when raw mode is unavailable so
+    the caller can fall back to line input.
+    """
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        # TCSANOW (not the TCSAFLUSH default): a key pressed just before the
+        # prompt appeared must survive, not be discarded with the queue.
+        tty.setraw(fd, termios.TCSANOW)
+        return sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def guided_prime(cfg: WatcherConfig) -> tuple[dict[str, Any] | None, bool]:
     """Force a daemon-side re-prime and walk through Apple's dialogs.
+
+    Args:
+        cfg: Active watcher configuration (determines which dialogs to expect).
 
     Returns (state, complete); state is None when non-interactive (priming
     continues in the background — the caller should point at doctor).
@@ -639,19 +685,75 @@ def guided_prime() -> tuple[dict[str, Any] | None, bool]:
     header("Permissions")
     print("  Priming from the running watcher (the identity Apple will ask about)...")
     permissions.clear_marker()
+    targets, wants_ax = permissions.expected_targets(cfg)
+    who, who_path = _watcher_identity()
+    # The list must appear instantly: bound the batch check on a daemon
+    # thread (no exit hang if it ever stalls) and degrade to unannotated
+    # lines rather than wait behind any slow stage.
+    probe: dict[str, dict[str, bool]] = {}
+    t = threading.Thread(target=lambda: probe.update(
+        {"r": permissions.apps_running(targets)}), daemon=True)
+    t.start()
+    t.join(1.5)
+    running = probe.get("r")
+    print("  Expect one macOS dialog per line — click Allow on each:")
+    for app in targets:
+        line = f'Automation: "{who}" may control "{app}"'
+        if (running is not None and app != "System Events"
+                and not running.get(app, False)):
+            line += " (not running — macOS will ask on first real injection)"
+        bullet(line)
+    if wants_ax:
+        bullet(f'Accessibility: turn on "{who}" '
+               "(appears after System Events is allowed)")
+    print(f"  {style(f'(watcher runs as {who_path})', 'dim')}")
+    print(f"  {style('Restarting watcher...', 'yellow')}", end="", flush=True)
     ok, e = start_service()
+    print(f" {style('done', 'green')}" if ok else f" {style('failed', 'red')}")
     if not ok:
         err(e or "could not restart the watcher")
         return None, False
-    permissions.open_settings_panes()
+    print(f"  {style('Opening System Settings...', 'yellow')}", end="", flush=True)
+    if permissions.open_settings_panes():
+        print(f" {style('done', 'green')}")
+    else:
+        print(f" {style('skipped (open Privacy & Security manually)', 'dim')}")
     if not sys.stdin.isatty():
         print()
         bullet("non-interactive shell: allow the macOS dialogs, then verify with:")
         print("    codex-autocontinue doctor")
         return None, False
     print()
+    print("  Click Allow in the macOS dialogs, then press Enter "
+          "to verify (q quits instantly)... ", end="", flush=True)
     try:
-        input("  Click Allow in the macOS dialogs, then press Enter to verify... ")
+        while True:
+            try:
+                ch = _read_key()
+            except (ImportError, OSError, ValueError):
+                # No raw mode (odd stdin, non-POSIX): line-input fallback.
+                print()
+                try:
+                    reply = input("  Type q to quit, or press Enter to verify... ")
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    return permissions.load_state(), False
+                if reply.strip().lower() in ("q", "quit"):
+                    print()
+                    return permissions.load_state(), False
+                break
+            if ch in ("q", "Q"):
+                print()
+                return permissions.load_state(), False
+            if ch in ("\r", "\n"):
+                print()
+                break
+            if ch in ("\x03", "\x04", ""):
+                # Ctrl+C, Ctrl+D, EOF (raw mode disables ISIG, so Ctrl+C
+                # arrives as a byte instead of raising).
+                print()
+                return permissions.load_state(), False
+            # Any other key: ignore and keep waiting.
     except (EOFError, KeyboardInterrupt):
         print()
         return permissions.load_state(), False
@@ -731,7 +833,7 @@ def cmd_install(args: argparse.Namespace) -> int:
 
     prime_state = None
     if sys.platform == "darwin":
-        prime_state, prime_complete = guided_prime()
+        prime_state, prime_complete = guided_prime(cfg)
         if prime_state is not None:
             permission_report(prime_state, prime_complete)
 
@@ -942,7 +1044,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print()
         return 0
     if args.fix:
-        state, complete = guided_prime()
+        state, complete = guided_prime(cfg)
         if state is not None:
             permission_report(state, complete)
         print()
