@@ -1,18 +1,15 @@
 #!/bin/bash
-# codex-autocontinue — developer control script (macOS / Linux).
-# install/uninstall registers the watcher with the OS service manager and
-# puts this command on PATH; start/stop/status/logs manage the watcher.
-#   macOS: launchd (~/Library/LaunchAgents)
-#   Linux: systemd --user (~/.config/systemd/user)
+# codex-autocontinue — thin shim (macOS / Linux).
+# All commands are implemented in Python: codex-autocontinue.py dispatches
+# subcommands to cli.py. This script only locates the repo and python3.
 # Windows: use codex-autocontinue.ps1 instead.
 set -euo pipefail
 
 OS="$(uname -s)"
-LABEL="com.qukai.codex-autocontinue"
-UNIT="codex-autocontinue.service"
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-UNIT_DIR="$HOME/.config/systemd/user"
-BIN_DIR="$HOME/.local/bin"
+if [ "$OS" != "Darwin" ] && [ "$OS" != "Linux" ]; then
+    echo "unsupported OS: $OS (on Windows use codex-autocontinue.ps1)" >&2
+    exit 1
+fi
 
 SOURCE="${BASH_SOURCE[0]}"
 while [ -h "$SOURCE" ]; do
@@ -21,209 +18,8 @@ while [ -h "$SOURCE" ]; do
     [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 REPO="$(cd -P "$(dirname "$SOURCE")" && pwd)"
-DAEMON="$REPO/codex-autocontinue.py"
-LOG="$REPO/watcher.log"
-
-if [ "$OS" != "Darwin" ] && [ "$OS" != "Linux" ]; then
-    echo "unsupported OS: $OS (on Windows use codex-autocontinue.ps1)" >&2
-    exit 1
-fi
 
 PYTHON3="$(command -v python3 || true)"
 [ -n "$PYTHON3" ] || { echo "python3 not found on PATH" >&2; exit 1; }
 
-ensure_on_path() {
-    if command -v codex-autocontinue >/dev/null 2>&1; then
-        echo "on PATH: $(command -v codex-autocontinue)"
-        return
-    fi
-    local shell_name rc
-    shell_name="$(basename "${SHELL:-}")"
-    if [ "$OS" = "Darwin" ]; then
-        shell_name="$(basename "$(dscl . -read "/Users/$USER" UserShell 2>/dev/null | awk '{print $2}')")"
-    fi
-    case "$shell_name" in
-        zsh)  rc="$HOME/.zshrc" ;;
-        bash) rc="$HOME/.bash_profile" ;;
-        fish) rc="$HOME/.config/fish/config.fish" ;;
-        *)
-            echo "add this to your shell startup file manually:"
-            echo '  export PATH="$HOME/.local/bin:$PATH"'
-            return
-            ;;
-    esac
-    mkdir -p "$(dirname "$rc")"
-    touch "$rc"
-    if ! grep -q '.local/bin' "$rc"; then
-        if [ "$shell_name" = fish ]; then
-            echo 'fish_add_path $HOME/.local/bin' >> "$rc"
-        else
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc"
-        fi
-        echo "added ~/.local/bin to PATH in $rc (open a new shell to pick it up)"
-    else
-        echo "~/.local/bin already in $rc; open a new shell to pick it up"
-    fi
-}
-
-svc_install() {
-    if [ "$OS" = "Darwin" ]; then
-        mkdir -p "$HOME/Library/LaunchAgents"
-        cat > "$PLIST" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>$LABEL</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>$PYTHON3</string>
-        <string>$DAEMON</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>$LOG</string>
-    <key>StandardErrorPath</key>
-    <string>$LOG</string>
-</dict>
-</plist>
-EOF
-        launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-        launchctl bootstrap "gui/$(id -u)" "$PLIST"
-        echo "launchd agent installed and started: $LABEL"
-    else
-        if ! command -v systemctl >/dev/null 2>&1; then
-            echo "systemctl not found; run the daemon manually: $PYTHON3 $DAEMON" >&2
-            exit 1
-        fi
-        mkdir -p "$UNIT_DIR"
-        cat > "$UNIT_DIR/$UNIT" <<EOF
-[Unit]
-Description=codex-autocontinue watcher
-
-[Service]
-ExecStart=$PYTHON3 $DAEMON
-Restart=always
-RestartSec=5
-StandardOutput=append:$LOG
-StandardError=append:$LOG
-
-[Install]
-WantedBy=default.target
-EOF
-        systemctl --user daemon-reload
-        systemctl --user enable --now "$UNIT"
-        echo "systemd user service installed and started: $UNIT"
-    fi
-}
-
-svc_uninstall() {
-    if [ "$OS" = "Darwin" ]; then
-        launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-        rm -f "$PLIST"
-    else
-        systemctl --user disable --now "$UNIT" 2>/dev/null || true
-        rm -f "$UNIT_DIR/$UNIT"
-        systemctl --user daemon-reload 2>/dev/null || true
-    fi
-}
-
-svc_start() {
-    if [ "$OS" = "Darwin" ]; then
-        [ -f "$PLIST" ] || { echo "not installed; run: codex-autocontinue install" >&2; exit 1; }
-        launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || true
-        launchctl kickstart -k "gui/$(id -u)/$LABEL"
-    else
-        systemctl --user restart "$UNIT"
-    fi
-    echo "started"
-}
-
-svc_stop() {
-    if [ "$OS" = "Darwin" ]; then
-        launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null && echo "stopped" || echo "not running"
-    else
-        systemctl --user stop "$UNIT" 2>/dev/null && echo "stopped" || echo "not running"
-    fi
-    echo "(still installed; will start again at login — 'start' to resume now)"
-}
-
-svc_status() {
-    if [ "$OS" = "Darwin" ]; then
-        if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
-            local pid
-            pid="$(launchctl print "gui/$(id -u)/$LABEL" | awk '$1 == "pid" {print $3; exit}')"
-            echo "running (pid ${pid:-?})"
-        else
-            echo "not running"
-        fi
-    else
-        if systemctl --user is-active --quiet "$UNIT"; then
-            echo "running (pid $(systemctl --user show -p MainPID --value "$UNIT"))"
-        else
-            echo "not running"
-        fi
-    fi
-    if [ -f "$LOG" ]; then
-        local n
-        n="$(grep -c 'auto-continue injected' "$LOG" || true)"
-        echo "auto-continues so far: $n"
-        echo "last log lines:"
-        tail -n 3 "$LOG" | sed 's/^/  /'
-    fi
-}
-
-print_post_install_notes() {
-    local dry
-    dry="$("$PYTHON3" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("dry_run", True))' "$REPO/config.json" 2>/dev/null || echo True)"
-    echo ""
-    echo "dry_run is $dry (see $REPO/config.json)"
-    if [ "$dry" = "True" ]; then
-        echo "the watcher will detect events and log what it WOULD do, injecting nothing."
-        echo "set \"dry_run\": false in config.json and run: codex-autocontinue start"
-    fi
-    if [ "$OS" = "Darwin" ]; then
-        echo ""
-        echo "one-time permissions (prompted on first real injection):"
-        echo "  - Automation: allow controlling iTerm2 / Terminal / System Events"
-        echo "  - Accessibility: System Settings -> Privacy & Security -> Accessibility"
-        echo "    (needed for the CodexManager desktop app and keystroke fallback)"
-    else
-        echo ""
-        echo "Linux injection helpers (any one): tmux (best), xdotool (X11), ydotool (Wayland)."
-        echo "without one of these the watcher runs detection-only."
-    fi
-}
-
-cmd_install() {
-    mkdir -p "$BIN_DIR"
-    ln -sf "$REPO/codex-autocontinue" "$BIN_DIR/codex-autocontinue"
-    echo "linked: $BIN_DIR/codex-autocontinue -> $REPO/codex-autocontinue"
-    svc_install
-    ensure_on_path
-    print_post_install_notes
-}
-
-cmd_uninstall() {
-    svc_uninstall
-    rm -f "$BIN_DIR/codex-autocontinue"
-    echo "uninstalled: service removed, PATH symlink removed."
-    echo "repo left in place at $REPO (delete manually if unwanted)."
-}
-
-case "${1:-}" in
-    install)   cmd_install ;;
-    uninstall) cmd_uninstall ;;
-    start)     svc_start ;;
-    stop)      svc_stop ;;
-    status)    svc_status ;;
-    logs)      touch "$LOG"; tail -n 50 -f "$LOG" ;;
-    *)
-        echo "usage: codex-autocontinue {install|uninstall|start|stop|status|logs}" >&2
-        exit 1
-        ;;
-esac
+exec "$PYTHON3" "$REPO/codex-autocontinue.py" "$@"

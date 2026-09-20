@@ -1,3 +1,5 @@
 watcher.log
+permissions.json
+.permissions-primed
 __pycache__/
 .DS_Store

@@ -28,31 +28,42 @@
 
 ## 安装
 
-macOS / Linux：
+一行命令（macOS / Linux）——克隆到 `~/.codex-autocontinue` 并完成安装：
 
 ```sh
-./codex-autocontinue install
+curl -fsSL https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/install.sh | bash
 ```
 
-Windows（PowerShell）：
+一行命令（Windows PowerShell）：
 
 ```powershell
-.\codex-autocontinue.ps1 install
+irm https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/install.ps1 | iex
 ```
 
-`install` 只需执行一次：它会将看守进程注册到系统服务管理器（macOS 用 launchd，Linux 用 `systemd --user`，Windows 用任务计划程序），立即启动，把命令加入 PATH，并提示所需的授权步骤（例如 macOS 的辅助功能/自动化权限）。程序开机自启，崩溃后自动重启。无需 sudo、brew 或 pip。
+也可以自己克隆仓库后运行包装脚本：
+
+```sh
+./codex-autocontinue install        # macOS / Linux
+.\codex-autocontinue.ps1 install    # Windows PowerShell
+```
+
+`install` 只需执行一次：它会将看守进程注册到系统服务管理器（macOS 用 launchd，Linux 用 `systemd --user`，Windows 用任务计划程序），立即启动，把命令加入 PATH，并打印后续步骤。在 macOS 上还会一步完成自动化/辅助功能的授权引导——按提示在系统弹窗中点按“允许”，安装程序会逐项验证授权结果。程序开机自启，崩溃后自动重启。无需 sudo、brew 或 pip。
 
 ## 使用方法
 
-各平台命令完全一致（`./codex-autocontinue <命令>` 或 `.\codex-autocontinue.ps1 <命令>`）：
+各平台命令完全一致（`./codex-autocontinue <命令>` 或 `.\codex-autocontinue.ps1 <命令>`）。两个包装脚本只是薄壳——所有命令都由 Python 实现（仅标准库），带彩色输出，并遵循 `NO_COLOR` 与非 TTY 管道场景：
 
 ```
-install      一次性：注册到系统服务管理器、启动、打印授权步骤
-uninstall    停止并移除服务与 PATH 链接（见下文说明）
-start        启动（或重启）看守进程
-stop         停止（仍保持安装状态，下次登录时自动启动）
-status       查看运行状态：pid、自动续聊次数
-logs         查看看守日志
+install        一次性：注册到系统服务管理器、启动、自检、打印后续步骤
+uninstall      停止并移除服务与 PATH 项，列出残留文件
+               （--purge 会一并删除 watcher.log 和 shell 启动文件中的 PATH 行）
+start          启动（或重启）看守进程
+stop           停止（仍保持安装状态，下次登录时自动启动）
+status         查看运行状态：pid、运行时长、模式（DRY-RUN/LIVE）、注入方式可用性、自动续聊次数
+logs           高亮显示并持续跟踪看守日志
+               （-n N 只打印最后 N 行不跟踪；-f 强制跟踪）
+doctor         检查 macOS 授权状态与注入方式健康度
+               （--fix 重新执行授权引导）
 ```
 
 守护进程参数（一般无需直接使用）：
@@ -115,8 +126,7 @@ logs         查看看守日志
 - **`--simulate THREAD_ID` 会显示该线程的最新日志行，即使它不是容量事件**——请核对它报告的行 id。不带参数的 `--simulate` 会按短语过滤。
 - **`--once` 只能看到它那一轮轮询期间写入的行**（启动时即打水位），只适合检查链路是否通畅，不能用来补处理事件。
 - **交互式运行只打印到控制台，不写入 `watcher.log`**；只有服务托管运行时才会追加日志。反过来，以服务运行时 `DRY-RUN` 行可能在日志里出现两次（一次直接写文件，一次经由捕获的 stdout）。
-- **`uninstall` 只移除服务和 PATH 链接，shell 启动文件中的 `~/.local/bin` 行和 `watcher.log` 会保留**——如需彻底清除请手动删除。
-- `status` 显示 pid 和自动续聊次数，不显示运行时长。
+- **`uninstall` 只移除服务和 PATH 项，shell 启动文件中的 `~/.local/bin` 行和 `watcher.log` 会保留**——加 `--purge` 可一并清除。仓库目录始终保留，不需要时手动删除即可。
 
 ## 依赖要求
 

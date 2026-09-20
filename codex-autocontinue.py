@@ -14,11 +14,14 @@ import os
 import random
 import sqlite3
 import sys
+import threading
 import time
 from collections import deque
 from pathlib import Path
 
+import cli
 import injectors
+import permissions
 
 REPO = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(REPO, "config.json")
@@ -275,6 +278,14 @@ def cmd_watch(cfg, injector, dry_run, once):
         "watcher started (%s, %s, dry_run=%s, watermark id=%d, phrase=%r)"
         % (sys.platform, type(injector).__name__, dry_run, last_id, cfg["phrase"])
     )
+    if sys.platform == "darwin" and not permissions.is_primed():
+        # Prime TCC permissions from this (launchd) identity in the background:
+        # probes block on Apple's Allow dialogs, never on the watcher loop.
+        thread = threading.Thread(
+            target=permissions.prime_all, args=(cfg,), kwargs={"log": log},
+            daemon=True, name="prime-permissions",
+        )
+        thread.start()
     limiter = Limiter(cfg)
     while True:
         for row in fetch_new(conn, last_id, cfg["phrase"]):
@@ -287,6 +298,13 @@ def cmd_watch(cfg, injector, dry_run, once):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in cli.COMMANDS:
+        return cli.main(sys.argv[1:])
+    if len(sys.argv) == 1 and sys.stdout.isatty():
+        # Invoked by hand with no args (service managers are never a tty):
+        # show the CLI help instead of silently starting a foreground watcher.
+        return cli.main([])
+
     parser = argparse.ArgumentParser(description="codex-autocontinue daemon")
     parser.add_argument("--dry-run", action="store_true", help="log only, never inject")
     parser.add_argument("--no-dry-run", action="store_true", help="inject for real")

@@ -28,31 +28,44 @@ When no injector is available on a platform, the tool still detects events and l
 
 ## Install
 
-macOS / Linux:
+One line (macOS / Linux) — clones into `~/.codex-autocontinue` and installs:
 
 ```sh
-./codex-autocontinue install
+curl -fsSL https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/install.sh | bash
 ```
 
-Windows (PowerShell):
+One line (Windows PowerShell):
 
 ```powershell
-.\codex-autocontinue.ps1 install
+irm https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/install.ps1 | iex
 ```
 
-`install` is one-time: it registers the watcher with the OS service manager (launchd on macOS, `systemd --user` on Linux, Task Scheduler on Windows), starts it, puts the command on PATH, and prints any permission steps (e.g. macOS Accessibility/Automation). It starts at login and restarts automatically if it crashes. No sudo, no brew, no pip.
+Or clone the repo yourself and run the wrapper:
+
+```sh
+./codex-autocontinue install        # macOS / Linux
+.\codex-autocontinue.ps1 install    # Windows PowerShell
+```
+
+`install` is one-time: it registers the watcher with the OS service manager (launchd on macOS, `systemd --user` on Linux, Task Scheduler on Windows), starts it, puts the command on PATH, and prints any next steps. On macOS it also handles Automation/Accessibility approval in one guided flow — click Allow in the system dialogs when asked and install verifies each grant. It starts at login and restarts automatically if it crashes. No sudo, no brew, no pip.
 
 ## Usage
 
-Commands are identical on every platform (`./codex-autocontinue <command>` or `.\codex-autocontinue.ps1 <command>`):
+Commands are identical on every platform (`./codex-autocontinue <command>` or `.\codex-autocontinue.ps1 <command>`). Both wrappers are thin shims — all commands are implemented in Python (stdlib only) with styled output that respects `NO_COLOR` and non-TTY pipes:
 
 ```
-install      one-time: register with the OS service manager, start, print permission steps
-uninstall    stop and remove the service + PATH symlink (see note below)
-start        start (or restart) the watcher
-stop         stop it (still installed, starts again at login)
-status       running? pid, auto-continue count
-logs         tail the watcher log
+install           one-time: register with the OS service manager, start, self-check,
+                  print next steps
+uninstall         stop and remove the service + PATH entry, list anything left behind
+                  (--purge also removes watcher.log and the shell rc PATH line)
+start             start (or restart) the watcher
+stop              stop it (still installed, starts again at login)
+status            running? pid, uptime, mode (DRY-RUN/LIVE), injector availability,
+                  auto-continue count
+logs              tail -f the watcher log with highlighting
+                  (-n N prints the last N lines without following; -f forces follow)
+doctor            check macOS permission grants + injector health
+                  (--fix re-runs guided permission priming)
 ```
 
 Useful daemon flags (rarely needed directly):
@@ -115,8 +128,7 @@ Found during testing; documented here so there are no surprises:
 - **`--simulate THREAD_ID` shows the thread's latest log row even if that row is not a capacity event** — check the row id it reports. Bare `--simulate` (no id) does filter by the phrase.
 - **`--once` only sees rows written during its single pass** (it watermarks at startup), so it is a plumbing check, not a way to catch up on events.
 - **Interactive runs print to the console instead of `watcher.log`**; only service-managed runs append to the log. Conversely, `DRY-RUN` lines can appear twice in the log when running as a service (once via the file, once via captured stdout).
-- **`uninstall` removes the service and the PATH symlink but leaves the `~/.local/bin` line in your shell rc file and `watcher.log`** — delete those manually if you want zero trace.
-- `status` reports pid and the auto-continue count, but not uptime.
+- **`uninstall` removes the service and the PATH entry but leaves the `~/.local/bin` line in your shell rc file and `watcher.log`** — rerun with `--purge` to remove those too. The repo itself is always left in place.
 
 ## Requirements
 

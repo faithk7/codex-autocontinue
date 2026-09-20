@@ -25,7 +25,7 @@ The user never has to type `continue` manually again.
 
 ## Developer interface
 
-One wrapper script in the repo; developers never touch the service manager directly:
+One wrapper script per platform; developers never touch the service manager directly. Both wrappers are thin shims — the commands themselves are implemented once in Python (`cli.py`, dispatched from `codex-autocontinue.py`), with styled terminal output that degrades gracefully under `NO_COLOR` / pipes:
 
 - macOS / Linux: `./codex-autocontinue <command>`
 - Windows: `./codex-autocontinue.ps1 <command>`
@@ -33,15 +33,17 @@ One wrapper script in the repo; developers never touch the service manager direc
 Commands (identical on every platform):
 
 ```
-install      # one-time: registers with the OS service manager, starts it, prints permission steps
-uninstall    # stops and fully removes (nothing left behind)
+install      # one-time: registers with the OS service manager, starts it, self-checks, prints next steps
+uninstall    # stops and removes the service + PATH entry, lists leftovers (--purge removes log + rc PATH line)
 start        # start (or restart) the watcher
 stop         # stop it (still installed, starts again at login)
-status       # running? pid, uptime, auto-continue count
-logs         # tail the watcher log
+status       # running? pid, uptime, mode (DRY-RUN/LIVE), injector availability, auto-continue count
+logs         # tail -f the watcher log with highlighting (-n N prints N lines without following)
+doctor       # check macOS permission grants + injector health (--fix re-runs guided priming)
 ```
 
 - Service manager per OS: launchd (macOS), systemd `--user` (Linux), Task Scheduler (Windows). The wrapper picks automatically.
+- On macOS, `install` primes Automation/Accessibility in one guided flow: the daemon fires harmless versions of its real AppleEvents (so Apple's dialogs grant the launchd identity, not the terminal), the installer opens the right Settings panes, waits for the user to click Allow, and verifies each grant. `doctor` re-checks later; `doctor --fix` repairs.
 - `install` and `uninstall` are exact opposites; reinstalling is always clean.
 - No brew, no pip, no admin/sudo — everything lives in the user-level service directory + the repo.
 
@@ -49,7 +51,7 @@ logs         # tail the watcher log
 
 - macOS / Linux: `install` symlinks the wrapper to `~/.local/bin/codex-autocontinue`; if that dir is not on PATH, it detects the user's login shell and appends the export to the right startup file (`~/.zshrc`, `~/.bash_profile`, `~/.config/fish/config.fish`), creating the file if it does not exist. For unrecognized shells it prints the line to add manually.
 - Windows: `install` adds the repo directory to the user PATH (registry `HKCU\Environment`), effective in new shells.
-- `uninstall` removes the symlink / PATH entry.
+- `uninstall` removes the symlink / PATH entry; `--purge` additionally removes `watcher.log` and the rc-file PATH line.
 - Either way, `install` verifies the command is on PATH afterwards and says so.
 
 ## Requirements
