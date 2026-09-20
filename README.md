@@ -8,6 +8,17 @@ A silent background watcher that automatically replies `continue` whenever Codex
 
 You never have to type `continue` manually again.
 
+## Features
+
+| Feature | Description |
+|---|---|
+| Silent operation | Runs in the background and records one line per action in `watcher.log`. No notifications, UI, or focus stealing. |
+| Exact-session routing | Resolves the affected session from its rollout file and injects only into that tmux pane, terminal, or desktop app window. |
+| Queue awareness | Remains silent when the session already has queued messages that will continue it. |
+| Rate limits | Enforces a per-session cooldown and a global hourly cap to prevent repeated input. |
+| Graceful degradation | Continues detection and logs a manual prompt when no injector is available on the platform. |
+| Dry-run mode | Logs the planned injection without sending input, for validation before live use. |
+
 ## How it works
 
 1. Polls `~/.codex/logs_2.sqlite` for newly logged "model is at capacity" events (never touches backlog from before it started).
@@ -25,6 +36,32 @@ You never have to type `continue` manually again.
 | Windows  | Best-effort | PowerShell SendKeys |
 
 When no injector is available on a platform, the tool still detects events and logs "type continue yourself" instead of failing.
+
+## Quick Start
+
+### Prerequisites
+
+- Python 3 (standard library only, no third-party packages).
+
+### Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/install.sh | bash
+```
+
+On Windows PowerShell, use `irm https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/install.ps1 | iex` instead.
+
+### Verify
+
+```sh
+codex-autocontinue status
+```
+
+### Follow logs
+
+```sh
+codex-autocontinue logs -n 20
+```
 
 ## Install
 

@@ -8,6 +8,17 @@
 
 你再也不用手动输入 `continue` 了。
 
+## 功能特性
+
+| 功能 | 说明 |
+|---|---|
+| 静默运行 | 在后台运行，每次动作只向 `watcher.log` 写一行日志。无通知、无界面、不抢焦点。 |
+| 精确会话路由 | 根据 rollout 文件定位受影响的会话，只向对应的 tmux 面板、终端或桌面应用窗口注入。 |
+| 队列感知 | 会话已有排队消息可推动继续时，保持静默。 |
+| 速率限制 | 通过单会话冷却和全局每小时上限，避免重复输入。 |
+| 优雅降级 | 平台无可用注入工具时继续检测，并在日志中提示手动输入。 |
+| 演练模式 | 只记录计划执行的注入而不实际发送，便于在正式启用前验证。 |
+
 ## 工作原理
 
 1. 轮询 `~/.codex/logs_2.sqlite`，只处理新产生的 "model is at capacity" 日志（不会处理启动前的历史记录）。
@@ -25,6 +36,32 @@
 | Windows | 尽力而为 | PowerShell SendKeys |
 
 当平台上没有可用的注入工具时，程序仍会检测事件并在日志中提示"请手动输入 continue"，而不会报错退出。
+
+## 快速开始
+
+### 前置要求
+
+- Python 3（仅标准库，无第三方包）。
+
+### 安装
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/install.sh | bash
+```
+
+Windows PowerShell 请改用 `irm https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/install.ps1 | iex`。
+
+### 验证
+
+```sh
+codex-autocontinue status
+```
+
+### 查看日志
+
+```sh
+codex-autocontinue logs -n 20
+```
 
 ## 安装
 
