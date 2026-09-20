@@ -7,9 +7,12 @@ injection lives in injectors.py; this file is the portable core:
 detection, routing, safety limits, logging. Stdlib only.
 """
 
+from __future__ import annotations
+
 import argparse
 import glob
 import json
+import math
 import os
 import random
 import sqlite3
@@ -17,11 +20,15 @@ import sys
 import threading
 import time
 from collections import deque
+from contextlib import closing, suppress
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import cli
 import injectors
 import permissions
+from util import DEFAULT_WATCHER_CONFIG, WatcherConfig, validate_config
 
 REPO = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(REPO, "config.json")
@@ -30,58 +37,69 @@ CODEX_DIR = str(Path.home() / ".codex")
 LOGS_DB = os.path.join(CODEX_DIR, "logs_2.sqlite")
 QUEUE_DB = os.path.join(CODEX_DIR, "queue_1.sqlite")
 
-DEFAULTS = {
-    "phrase": "model is at capacity",
-    "reply": "continue",
-    "poll_interval_seconds": 0.25,
-    "response_delay_seconds": 1.0,
-    "skip_when_queued": True,
-    "per_thread_cooldown_seconds": 60,
-    "max_continues_per_hour": 20,
-    "dry_run": True,
-    "desktop_app_name": "CodexManager",
-    "inject_cli": True,
-    "inject_app": True,
-    "use_tmux": True,
-    "use_applescript": True,
-    "use_xdotool": True,
-    "use_ydotool": True,
-}
+# Rolling window for the global hourly injection cap.
+SECONDS_PER_HOUR = 3600
+# Injection delay is randomized by ±25% to avoid lockstep retries.
+INJECT_JITTER = 0.25
+# Minimum retry delay while waiting for the Codex database to appear.
+DB_WAIT_MIN_DELAY = 5
 
+def load_config() -> WatcherConfig:
+    """Load config.json over the built-in defaults.
 
-def load_config():
-    cfg = dict(DEFAULTS)
+    Returns:
+        WatcherConfig with file values overlaid; a corrupt file keeps the
+        defaults with a WARNING, a missing file keeps the fail-safe
+        defaults (dry_run on), and individual mistyped keys fall back
+        per-key with a WARNING each.
+    """
+    cfg = dict(DEFAULT_WATCHER_CONFIG)
     try:
         with open(CONFIG_PATH) as f:
             loaded = json.load(f)
         if isinstance(loaded, dict):
-            cfg.update(loaded)
+            cfg = validate_config(loaded, warn=lambda m: log(f"WARNING: {m}"))
         else:
-            log("WARNING: %s is not a JSON object; using defaults" % CONFIG_PATH)
+            log(f"WARNING: {CONFIG_PATH} is not a JSON object; using defaults")
     except FileNotFoundError:
         pass
     except (ValueError, OSError) as e:
-        log("WARNING: corrupt %s (%s); using defaults" % (CONFIG_PATH, e))
+        log(f"WARNING: corrupt {CONFIG_PATH} ({e}); using defaults")
     return cfg
 
 
-def log(msg, console=False):
-    line = "%s %s" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg)
+def log(msg: str, console: bool = False) -> None:
+    """Write a timestamped line to the watcher log.
+
+    Prints to stdout instead of the file when attached to a terminal, so
+    interactive runs never touch watcher.log. File errors are ignored.
+
+    Args:
+        msg: Message body; a timestamp is prepended.
+        console: Also echo to stdout when writing to the file.
+    """
+    line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}"
     if sys.stdout.isatty():
         print(line, flush=True)
         return
-    try:
-        with open(LOG_PATH, "a") as f:
-            f.write(line + "\n")
-    except OSError:
-        pass
+    # Logging must never crash the watcher.
+    with suppress(OSError), open(LOG_PATH, "a") as f:
+        f.write(line + "\n")
     if console:
         print(line, flush=True)
 
 
-def find_rollout(thread_id):
+def find_rollout(thread_id: str) -> str | None:
+    """Locate the newest rollout file for a Codex thread id.
+
+    Args:
+        thread_id: Thread id suffix embedded in the rollout filename.
+
+    Returns:
+        Path to the most recently modified match, or None when absent.
+    """
     pattern = os.path.join(
-        CODEX_DIR, "sessions", "*", "*", "*", "rollout-*-%s.jsonl" % thread_id
+        CODEX_DIR, "sessions", "*", "*", "*", f"rollout-*-{thread_id}.jsonl"
     )
     matches = glob.glob(pattern)
     if not matches:
@@ -89,7 +107,17 @@ def find_rollout(thread_id):
     return max(matches, key=os.path.getmtime)
 
 
-def rollout_surface(rollout_path):
+def rollout_surface(rollout_path: str) -> str:
+    """Classify a rollout as a CLI session, app session, or unknown.
+
+    Reads only the JSONL metadata header; unreadable files are "unknown".
+
+    Args:
+        rollout_path: Path to the session rollout file.
+
+    Returns:
+        "cli", "app", or "unknown".
+    """
     try:
         with open(rollout_path) as f:
             meta = json.loads(f.readline())
@@ -104,16 +132,28 @@ def rollout_surface(rollout_path):
 
 
 class Limiter:
-    def __init__(self, cfg):
-        self.cooldown = cfg["per_thread_cooldown_seconds"]
-        self.cap = cfg["max_continues_per_hour"]
-        self.per_thread = {}
-        self.hourly = deque()
+    """Per-session cooldown plus a global rolling-hour injection cap."""
+    def __init__(self, cfg: WatcherConfig) -> None:
+        self.cooldown: float = cfg["per_thread_cooldown_seconds"]
+        self.cap: int = cfg["max_continues_per_hour"]
+        self.per_thread: dict[str, float] = {}
+        self.hourly: deque[float] = deque()
 
-    def allow(self, thread_id):
+    def allow(self, thread_id: str) -> tuple[bool, str]:
+        """Check whether a thread may be continued now.
+
+        Args:
+            thread_id: Thread to check.
+
+        Returns:
+            (allowed, reason); reason is "" when allowed.
+        """
         now = time.time()
-        while self.hourly and now - self.hourly[0] > 3600:
+        while self.hourly and now - self.hourly[0] > SECONDS_PER_HOUR:
             self.hourly.popleft()
+        # Drop expired cooldowns so idle threads do not accumulate forever.
+        self.per_thread = {t: ts for t, ts in self.per_thread.items()
+                            if now - ts < self.cooldown}
         if len(self.hourly) >= self.cap:
             return False, "hourly cap reached"
         last = self.per_thread.get(thread_id, 0)
@@ -121,107 +161,158 @@ class Limiter:
             return False, "thread cooldown"
         return True, ""
 
-    def record(self, thread_id):
+    def record(self, thread_id: str) -> None:
+        """Record an injection for cooldown and cap accounting."""
         now = time.time()
         self.per_thread[thread_id] = now
         self.hourly.append(now)
 
 
-def handle_capacity(cfg, injector, limiter, row, dry_run):
-    row_id, ts, thread_id, process_uuid = row
-    if not thread_id:
-        log("skip row %d: no thread_id" % row_id)
-        return
+@dataclass
+class InjectionPlan:
+    """Resolved injection target plus a one-line log label."""
+
+    thread_id: str
+    surface: str
+    pid: str | None
+    tty: str | None
+    label: str
+
+
+def plan_injection(cfg: WatcherConfig, thread_id: str) -> tuple[InjectionPlan | None, str]:
+    """Resolve where a reply to a thread should be injected.
+
+    Args:
+        cfg: Active watcher configuration.
+        thread_id: Thread whose session should receive the reply.
+
+    Returns:
+        (plan, skip_message); plan is None when the event must be
+        skipped, in which case skip_message is the full log line.
+    """
     rollout = find_rollout(thread_id)
     if not rollout:
-        log("skip thread %s: no rollout file found" % thread_id)
-        return
+        return None, f"skip thread {thread_id}: no rollout file found"
     surface = rollout_surface(rollout)
-
-    plan = "thread=%s surface=%s" % (thread_id, surface)
+    label = f"thread={thread_id} surface={surface}"
     if surface == "cli":
         if sys.platform == "win32":
             pid, tty = None, None
         else:
             pid, tty = injectors.pid_tty_for_rollout(rollout)
-        plan += " pid=%s tty=%s" % (pid, tty)
+        label += f" pid={pid} tty={tty}"
         if sys.platform != "win32" and not (pid or tty):
-            log("skip %s: codex process/tty not found" % plan)
-            return
-    else:
-        plan += " app=%s" % cfg.get("desktop_app_name", "CodexManager")
+            return None, f"skip {label}: codex process/tty not found"
+        return InjectionPlan(thread_id, surface, pid, tty, label), ""
+    label += f" app={cfg.get('desktop_app_name', 'CodexManager')}"
+    return InjectionPlan(thread_id, surface, None, None, label), ""
+
+
+def handle_capacity(cfg: WatcherConfig, injector: injectors.Injector,
+                     limiter: Limiter, row: tuple[Any, ...], dry_run: bool) -> None:
+    """Route one capacity event: skip it or inject the reply into its session.
+
+    Skips silently when the thread id or rollout is missing, the
+    process/tty is gone, limits are hit, or queued messages will drive
+    the session on their own.
+
+    Args:
+        cfg: Active watcher configuration.
+        injector: Platform injector for this machine.
+        limiter: Shared rate limiter.
+        row: Log row tuple (id, ts, thread_id, process_uuid).
+        dry_run: Log the injection plan instead of injecting.
+    """
+    row_id, _ts, thread_id, _process_uuid = row
+    if not thread_id:
+        log(f"skip row {row_id}: no thread_id")
+        return
+    plan, skip_message = plan_injection(cfg, thread_id)
+    if plan is None:
+        log(skip_message)
+        return
 
     if dry_run:
-        log("DRY-RUN would inject %r -> %s" % (cfg["reply"], plan), console=True)
+        log(f"DRY-RUN would inject {cfg['reply']!r} -> {plan.label}", console=True)
         return
 
     ok, reason = limiter.allow(thread_id)
     if not ok:
-        log("skip %s: %s" % (plan, reason))
+        log(f"skip {plan.label}: {reason}")
         return
 
     delay = cfg.get("response_delay_seconds", 0)
     if delay > 0:
-        time.sleep(delay * random.uniform(0.75, 1.25))
+        time.sleep(delay * random.uniform(1 - INJECT_JITTER, 1 + INJECT_JITTER))
 
     if cfg.get("skip_when_queued", True):
-        n = queued_count(QUEUE_DB, thread_id)
-        if n > 0:
-            log("skip %s: %d queued message(s) will drive the session" % (plan, n))
+        queued = queued_count(QUEUE_DB, thread_id)
+        if queued > 0:
+            log(f"skip {plan.label}: {queued} queued message(s) will drive the session")
             return
 
-    if surface == "cli":
+    if plan.surface == "cli":
         method = (
-            injector.inject_cli(pid, tty, cfg["reply"]) if cfg["inject_cli"] else None
+            injector.inject_cli(plan.pid, plan.tty, cfg["reply"])
+            if cfg["inject_cli"] else None
         )
     else:
         method = injector.inject_app(cfg["reply"]) if cfg["inject_app"] else None
     if method:
         limiter.record(thread_id)
-        log("auto-continue injected via %s -> %s" % (method, plan))
+        log(f"auto-continue injected via {method} -> {plan.label}")
     else:
-        log("FAILED to inject -> %s (no injector available; type 'continue' yourself)" % plan)
+        log(f"FAILED to inject -> {plan.label} (no injector available; type 'continue' yourself)")
 
 
-def open_db():
-    return sqlite3.connect("file:%s?mode=ro" % LOGS_DB, uri=True)
+def open_db() -> sqlite3.Connection:
+    """Open the Codex log database read-only."""
+    return sqlite3.connect(f"file:{LOGS_DB}?mode=ro", uri=True)
 
 
-def wait_for_db(interval):
-    """Block until the codex log DB exists (fresh machines: codex never ran)."""
-    while not os.path.exists(LOGS_DB):
-        log("waiting for %s (run codex once to create it)" % LOGS_DB)
-        time.sleep(max(interval, 5))
-    try:
-        return open_db()
-    except sqlite3.Error as e:
-        log("cannot open %s (%s); retrying" % (LOGS_DB, e))
-        time.sleep(max(interval, 5))
-        return wait_for_db(interval)
+def wait_for_db(interval: float) -> sqlite3.Connection:
+    """Block until the codex log DB exists and opens (fresh machines: codex never ran)."""
+    while True:
+        if not os.path.exists(LOGS_DB):
+            log(f"waiting for {LOGS_DB} (run codex once to create it)")
+        else:
+            try:
+                return open_db()
+            except sqlite3.Error as e:
+                log(f"cannot open {LOGS_DB} ({e}); retrying")
+        time.sleep(max(interval, DB_WAIT_MIN_DELAY))
 
 
-def queued_count(db_path, thread_id):
+def queued_count(db_path: str, thread_id: str) -> int:
     """How many stacked messages this thread has; 0 when unknown."""
     if not os.path.exists(db_path):
         return 0
     try:
-        conn = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
-        try:
+        with closing(sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)) as conn:
             return conn.execute(
                 "SELECT COUNT(*) FROM queued_items WHERE thread_id = ?",
                 (thread_id,),
             ).fetchone()[0]
-        finally:
-            conn.close()
     except sqlite3.Error:
         return 0
 
 
-def max_row_id(conn):
+def max_row_id(conn: sqlite3.Connection) -> int:
+    """Return the highest log row id, or 0 when the table is empty."""
     return conn.execute("SELECT COALESCE(MAX(id), 0) FROM logs").fetchone()[0]
 
 
-def fetch_new(conn, last_id, phrase):
+def fetch_new(conn: sqlite3.Connection, last_id: int, phrase: str) -> list[tuple[Any, ...]]:
+    """Fetch rows past last_id whose body matches the trigger phrase.
+
+    Args:
+        conn: Open log database connection.
+        last_id: Only rows with a greater id are returned.
+        phrase: Trigger phrase, matched case-insensitively.
+
+    Returns:
+        Matching rows ordered by id.
+    """
     return conn.execute(
         "SELECT id, ts, thread_id, process_uuid FROM logs "
         "WHERE id > ? AND instr(lower(COALESCE(feedback_log_body, '')), ?) > 0 "
@@ -230,7 +321,21 @@ def fetch_new(conn, last_id, phrase):
     ).fetchall()
 
 
-def latest_capacity_row(conn, phrase, thread_id):
+def latest_capacity_row(conn: sqlite3.Connection, phrase: str,
+                          thread_id: str | None) -> tuple[Any, ...] | None:
+    """Fetch the newest log row for --simulate.
+
+    Note: with thread_id the newest row is returned even when it is not
+    a capacity event; bare --simulate filters by the phrase instead.
+
+    Args:
+        conn: Open log database connection.
+        phrase: Trigger phrase filter (bare --simulate only).
+        thread_id: Thread to inspect, or None to filter by phrase.
+
+    Returns:
+        The newest matching row, or None when there is no match.
+    """
     if thread_id:
         return conn.execute(
             "SELECT id, ts, thread_id, process_uuid FROM logs WHERE thread_id = ? "
@@ -245,38 +350,77 @@ def latest_capacity_row(conn, phrase, thread_id):
     ).fetchone()
 
 
-def cmd_simulate(cfg, injector, thread_id):
+def cmd_simulate(cfg: WatcherConfig, injector: injectors.Injector,
+                 thread_id: str | None) -> int:
+    """Dry-run handle_capacity against one log row, without side effects.
+
+    Args:
+        cfg: Active watcher configuration.
+        injector: Platform injector for this machine.
+        thread_id: Thread to simulate, or None for the newest capacity row.
+
+    Returns:
+        Exit status: 0 when a row was simulated, 1 otherwise.
+    """
     try:
         conn = open_db()
     except sqlite3.Error as e:
-        print("no codex log database yet at %s (%s)" % (LOGS_DB, e))
+        print(f"no codex log database yet at {LOGS_DB} ({e})")
         return 1
-    row = latest_capacity_row(conn, cfg["phrase"], thread_id)
-    if not row:
-        print("no capacity event found in %s" % LOGS_DB)
-        return 1
-    print("simulating against log row id=%d thread=%s" % (row[0], row[2]))
-    handle_capacity(cfg, injector, Limiter(cfg), row, dry_run=True)
+    with closing(conn):
+        row = latest_capacity_row(conn, cfg["phrase"], thread_id)
+        if not row:
+            print(f"no capacity event found in {LOGS_DB}")
+            return 1
+        print(f"simulating against log row id={row[0]} thread={row[2]}")
+        handle_capacity(cfg, injector, Limiter(cfg), row, dry_run=True)
     return 0
 
 
-def cmd_watch(cfg, injector, dry_run, once):
-    interval = cfg["poll_interval_seconds"]
+def resolve_interval(cfg: WatcherConfig) -> float:
+    """Poll interval from config, falling back to the default when invalid.
+
+    Rejects missing, non-numeric, non-positive, and non-finite (nan/inf)
+    values with a WARNING; nan would otherwise crash time.sleep.
+
+    Args:
+        cfg: Active watcher configuration.
+
+    Returns:
+        Usable poll interval in seconds.
+    """
     try:
-        interval = float(interval)
+        interval = float(cfg["poll_interval_seconds"])
     except (TypeError, ValueError):
         interval = None
-    if not interval or interval <= 0:
+    if interval is None or interval <= 0 or not math.isfinite(interval):
         log(
-            "WARNING: poll_interval_seconds=%r invalid; using %s"
-            % (cfg["poll_interval_seconds"], DEFAULTS["poll_interval_seconds"])
+            f"WARNING: poll_interval_seconds={cfg['poll_interval_seconds']!r} invalid; "
+            f"using {DEFAULT_WATCHER_CONFIG['poll_interval_seconds']}"
         )
-        interval = DEFAULTS["poll_interval_seconds"]
+        return DEFAULT_WATCHER_CONFIG["poll_interval_seconds"]
+    return interval
+
+
+def cmd_watch(cfg: WatcherConfig, injector: injectors.Injector,
+              dry_run: bool, once: bool) -> int:
+    """Poll the log database and handle capacity events until stopped.
+
+    Args:
+        cfg: Active watcher configuration.
+        injector: Platform injector for this machine.
+        dry_run: Log injection plans instead of injecting.
+        once: Exit after a single poll pass.
+
+    Returns:
+        Exit status (0 on a normal --once pass; the loop runs forever).
+    """
+    interval = resolve_interval(cfg)
     conn = wait_for_db(interval)
     last_id = max_row_id(conn)
     log(
-        "watcher started (%s, %s, dry_run=%s, watermark id=%d, phrase=%r)"
-        % (sys.platform, type(injector).__name__, dry_run, last_id, cfg["phrase"])
+        f"watcher started ({sys.platform}, {type(injector).__name__}, "
+        f"dry_run={dry_run}, watermark id={last_id}, phrase={cfg['phrase']!r})"
     )
     if sys.platform == "darwin" and not permissions.is_primed():
         # Prime TCC permissions from this (launchd) identity in the background:
@@ -297,7 +441,8 @@ def cmd_watch(cfg, injector, dry_run, once):
         time.sleep(interval)
 
 
-def main():
+def main() -> int:
+    """Dispatch CLI subcommands or run the daemon; returns the exit status."""
     if len(sys.argv) > 1 and sys.argv[1] in cli.COMMANDS:
         return cli.main(sys.argv[1:])
     if len(sys.argv) == 1 and sys.stdout.isatty():

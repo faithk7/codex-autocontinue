@@ -5,23 +5,25 @@ for the best available mechanism on that OS, returning a short method name
 on success and None when no mechanism worked.
 """
 
+from __future__ import annotations
+
 import os
 import shutil
-import subprocess
 import sys
+from typing import Any, Sequence, Union
+
+from util import CommandResult, WatcherConfig, run
 
 
-def _run(cmd, timeout=20, **kw):
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, **kw)
-        return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
-    except (OSError, subprocess.TimeoutExpired):
-        return 1, "", ""
+def _run(cmd: Sequence[str], timeout: float = 20, **kw: Any) -> CommandResult:
+    """Run a probe command with the injector default timeout (see util.run)."""
+    return run(cmd, timeout=timeout, **kw)
 
 
 # ---- shared unix helpers -------------------------------------------------
 
-def tmux_pane_for_tty(tty):
+def tmux_pane_for_tty(tty: str | None) -> str | None:
+    """Find the tmux pane id attached to a tty, or None when unavailable."""
     if not tty or not shutil.which("tmux"):
         return None
     rc, out, _ = _run(["tmux", "list-panes", "-a", "-F", "#{pane_tty} #{pane_id}"])
@@ -34,7 +36,12 @@ def tmux_pane_for_tty(tty):
     return None
 
 
-def tmux_inject(tty, reply):
+def tmux_inject(tty: str | None, reply: str) -> str | None:
+    """Send reply+Enter to the tmux pane on a tty.
+
+    Returns:
+        "tmux" on success, None when the pane is missing or send fails.
+    """
     pane = tmux_pane_for_tty(tty)
     if not pane:
         return None
@@ -42,7 +49,7 @@ def tmux_inject(tty, reply):
     return "tmux" if rc == 0 else None
 
 
-def pid_tty_for_rollout(rollout_path):
+def pid_tty_for_rollout(rollout_path: str) -> tuple[str | None, str | None]:
     """Unix only: which codex process holds this rollout, and on which tty."""
     rc, out, _ = _run(["lsof", "-t", "--", rollout_path])
     for pid in out.split():
@@ -50,7 +57,7 @@ def pid_tty_for_rollout(rollout_path):
         parts = line.split(None, 1)
         if len(parts) == 2 and os.path.basename(parts[1]) == "codex":
             tty = parts[0]
-            if tty == "??":
+            if tty in ("??", "?"):  # "??" on macOS, "?" on Linux: no tty.
                 return pid, None
             if not tty.startswith("tty") and sys.platform == "darwin":
                 tty = "tty" + tty
@@ -116,15 +123,27 @@ end run
 """
 
 
-def osascript(script, *args):
+def osascript(script: str, *args: Any) -> CommandResult:
+    """Run an AppleScript with argv; returns the raw command result."""
     return _run(["osascript", "-"] + [str(a) for a in args], input=script, timeout=30)
 
 
 class MacInjector:
-    def __init__(self, cfg):
-        self.cfg = cfg
+    """Injects on macOS via tmux, AppleScript (iTerm2/Terminal), or app keystroke."""
+    def __init__(self, cfg: WatcherConfig) -> None:
+        self.cfg: WatcherConfig = cfg
 
-    def inject_cli(self, pid, tty, reply):
+    def inject_cli(self, pid: str | None, tty: str | None, reply: str) -> str | None:
+        """Inject reply into a CLI session.
+
+        Args:
+            pid: Codex process id, or None when unknown or unused.
+            tty: Session tty, or None when unknown or unused.
+            reply: Text to type, without the trailing Enter.
+
+        Returns:
+            Short method name on success, None when no mechanism worked.
+        """
         if self.cfg.get("use_tmux", True):
             method = tmux_inject(tty, reply)
             if method:
@@ -139,7 +158,15 @@ class MacInjector:
             return "terminal-doscript"
         return None
 
-    def inject_app(self, reply):
+    def inject_app(self, reply: str) -> str | None:
+        """Inject reply into the desktop app.
+
+        Args:
+            reply: Text to type, without the trailing Enter.
+
+        Returns:
+            Short method name on success, None when unsupported.
+        """
         app = self.cfg.get("desktop_app_name", "CodexManager")
         rc, out, _ = osascript(APP_SCRIPT, app, reply)
         return "app-keystroke" if rc == 0 and out == "ok" else None
@@ -148,10 +175,12 @@ class MacInjector:
 # ---- Linux ---------------------------------------------------------------
 
 class LinuxInjector:
-    def __init__(self, cfg):
-        self.cfg = cfg
+    """Injects on Linux via tmux, xdotool (X11), or ydotool (Wayland)."""
+    def __init__(self, cfg: WatcherConfig) -> None:
+        self.cfg: WatcherConfig = cfg
 
-    def _xdotool(self, pid, reply):
+    def _xdotool(self, pid: str | None, reply: str) -> str | None:
+        """Inject via xdotool into the window owned by pid; method or None."""
         if not pid or not shutil.which("xdotool") or not os.environ.get("DISPLAY"):
             return None
         rc, out, _ = _run(["xdotool", "search", "--pid", str(pid)])
@@ -169,7 +198,8 @@ class LinuxInjector:
                 return None
         return "xdotool"
 
-    def _ydotool(self, reply):
+    def _ydotool(self, reply: str) -> str | None:
+        """Inject via ydotool into the focused window; method or None."""
         if not shutil.which("ydotool") or not os.environ.get("WAYLAND_DISPLAY"):
             return None
         rc, _, _ = _run(["ydotool", "type", reply])
@@ -178,7 +208,17 @@ class LinuxInjector:
         rc, _, _ = _run(["ydotool", "key", "28:1", "28:0"])
         return "ydotool-focused-window" if rc == 0 else None
 
-    def inject_cli(self, pid, tty, reply):
+    def inject_cli(self, pid: str | None, tty: str | None, reply: str) -> str | None:
+        """Inject reply into a CLI session.
+
+        Args:
+            pid: Codex process id, or None when unknown or unused.
+            tty: Session tty, or None when unknown or unused.
+            reply: Text to type, without the trailing Enter.
+
+        Returns:
+            Short method name on success, None when no mechanism worked.
+        """
         if self.cfg.get("use_tmux", True):
             method = tmux_inject(tty, reply)
             if method:
@@ -191,17 +231,41 @@ class LinuxInjector:
             return self._ydotool(reply)
         return None
 
-    def inject_app(self, reply):
+    def inject_app(self, reply: str) -> str | None:
+        """Inject reply into the desktop app.
+
+        Args:
+            reply: Text to type, without the trailing Enter.
+
+        Returns:
+            Short method name on success, None when unsupported.
+        """
         return None
 
 
 # ---- Windows -------------------------------------------------------------
 
-class WindowsInjector:
-    def __init__(self, cfg):
-        self.cfg = cfg
+def _ps_quote(text: str) -> str:
+    """Escape text for a PowerShell single-quoted string."""
+    return text.replace("'", "''")
 
-    def inject_cli(self, pid, tty, reply):
+
+class WindowsInjector:
+    """Injects on Windows via PowerShell SendKeys to a codex.exe window."""
+    def __init__(self, cfg: WatcherConfig) -> None:
+        self.cfg: WatcherConfig = cfg
+
+    def inject_cli(self, pid: str | None, tty: str | None, reply: str) -> str | None:
+        """Inject reply into a CLI session.
+
+        Args:
+            pid: Codex process id, or None when unknown or unused.
+            tty: Session tty, or None when unknown or unused.
+            reply: Text to type, without the trailing Enter.
+
+        Returns:
+            Short method name on success, None when no mechanism worked.
+        """
         ps = (
             "$ws = New-Object -ComObject WScript.Shell; "
             "$pids = (Get-CimInstance Win32_Process -Filter \"Name='codex.exe'\").ProcessId; "
@@ -210,15 +274,28 @@ class WindowsInjector:
             "$ws.SendKeys('%s{ENTER}'); "
             "Write-Output 'ok'; exit 0 } }; "
             "exit 1"
-        ) % reply
+        ) % _ps_quote(reply)
         rc, out, _ = _run(["powershell", "-NoProfile", "-Command", ps], timeout=30)
         return "powershell-sendkeys" if rc == 0 and out == "ok" else None
 
-    def inject_app(self, reply):
+    def inject_app(self, reply: str) -> str | None:
+        """Inject reply into the desktop app.
+
+        Args:
+            reply: Text to type, without the trailing Enter.
+
+        Returns:
+            Short method name on success, None when unsupported.
+        """
         return None
 
 
-def get_injector(cfg):
+# Any platform injector; duck-typed on inject_cli/inject_app.
+Injector = Union[MacInjector, LinuxInjector, WindowsInjector]
+
+
+def get_injector(cfg: WatcherConfig) -> Injector:
+    """Return the injector for this platform (macOS, Windows, else Linux)."""
     if sys.platform == "darwin":
         return MacInjector(cfg)
     if sys.platform == "win32":

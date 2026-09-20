@@ -5,18 +5,21 @@ codex-autocontinue.py, which dispatches here when argv[1] is a subcommand;
 the bash and PowerShell wrappers are thin shims around this module.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import time
 from collections import deque
 from pathlib import Path
+from typing import Any, Callable, Sequence
 
 import permissions
+from util import DEFAULT_WATCHER_CONFIG, CommandResult, WatcherConfig, run, validate_config
 
 REPO = os.path.dirname(os.path.abspath(__file__))
 DAEMON = os.path.join(REPO, "codex-autocontinue.py")
@@ -37,10 +40,11 @@ COMMANDS = ("install", "uninstall", "start", "stop", "status", "logs", "doctor")
 
 # ---- presentation ---------------------------------------------------------
 
-_color = None
+_color: bool | None = None
 
 
-def use_color():
+def use_color() -> bool:
+    """True when styled output should be emitted (a tty, NO_COLOR unset)."""
     global _color
     if _color is None:
         ok = (
@@ -54,7 +58,8 @@ def use_color():
     return _color
 
 
-def _enable_vt():
+def _enable_vt() -> bool:
+    """Enable Windows virtual-terminal processing; True on success."""
     try:
         import ctypes
 
@@ -66,83 +71,76 @@ def _enable_vt():
         # ENABLE_VIRTUAL_TERMINAL_PROCESSING
         return bool(kernel32.SetConsoleMode(handle, mode.value | 0x0004))
     except Exception:
+        # Best-effort VT enable; any failure just means no styled output.
         return False
 
 
 _CODES = {"bold": 1, "dim": 2, "red": 31, "green": 32, "yellow": 33, "cyan": 36}
 
 
-def style(text, *names):
+def style(text: str, *names: str) -> str:
+    """Wrap text in ANSI codes, or return it unchanged without color."""
     if not use_color():
         return text
     seq = ";".join(str(_CODES[n]) for n in names)
-    return "\033[%sm%s\033[0m" % (seq, text)
+    return f"\033[{seq}m{text}\033[0m"
 
 
-def _symbol(name):
+def _symbol(name: str) -> str:
+    """Status glyph, with an ASCII fallback when stdout is not UTF-8."""
     if "utf" in (sys.stdout.encoding or "").lower():
         return {"ok": "✓", "fail": "✗", "warn": "!", "bullet": "•"}[name]
     return {"ok": "ok", "fail": "x", "warn": "!", "bullet": "-"}[name]
 
 
-def header(text):
+def header(text: str) -> None:
+    """Print a blank line plus a bold section header."""
     print()
     print(style(text, "bold"))
 
 
-def step(ok, label, detail=""):
+def step(ok: bool, label: str, detail: str = "") -> None:
+    """Print an ok/fail checklist line with an optional dim detail."""
     mark = style(_symbol("ok" if ok else "fail"), "green" if ok else "red", "bold")
-    line = "  %s %s" % (mark, label.ljust(20))
+    line = f"  {mark} {label.ljust(20)}"
     if detail:
         line += style(detail, "dim")
     print(line)
 
 
-def kv(key, value):
-    print("  %s  %s" % (style(key.ljust(10), "dim"), value))
+def kv(key: str, value: str) -> None:
+    """Print a dim-key plus value row."""
+    print(f"  {style(key.ljust(10), 'dim')}  {value}")
 
 
-def bullet(text):
-    print("  %s %s" % (style(_symbol("bullet"), "dim"), text))
+def bullet(text: str) -> None:
+    """Print a dim-bullet list item."""
+    print(f"  {style(_symbol('bullet'), 'dim')} {text}")
 
 
-def err(msg):
-    print(style("%s %s" % (_symbol("fail"), msg), "red"), file=sys.stderr)
+def err(msg: str) -> None:
+    """Print a red error line to stderr."""
+    print(style(f"{_symbol('fail')} {msg}", "red"), file=sys.stderr)
 
 
 # ---- shared helpers -------------------------------------------------------
+# run() is imported from util (shared subprocess helper); see util.run.
 
 
-def run(cmd, timeout=30):
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return 1, "", str(e)
-
-
-def load_config():
-    """Subset of the daemon's config the CLI reads (mirrors its defaults)."""
-    cfg = {
-        "dry_run": True,
-        "reply": "continue",
-        "desktop_app_name": "CodexManager",
-        "use_tmux": True,
-        "use_applescript": True,
-        "use_xdotool": True,
-        "use_ydotool": True,
-    }
+def load_config() -> WatcherConfig:
+    """Full watcher defaults; the CLI reads only the keys it needs."""
+    cfg = dict(DEFAULT_WATCHER_CONFIG)
     try:
         with open(CONFIG_PATH) as f:
             loaded = json.load(f)
         if isinstance(loaded, dict):
-            cfg.update(loaded)
+            cfg = validate_config(loaded)
     except (OSError, ValueError):
         pass
     return cfg
 
 
-def injector_rows(cfg):
+def injector_rows(cfg: WatcherConfig) -> list[tuple[str, bool, str]]:
     """[(name, available, note)] — which injection paths would work right now."""
     if sys.platform == "darwin":
         return [
@@ -151,7 +149,7 @@ def injector_rows(cfg):
             ("applescript", bool(cfg["use_applescript"]),
              "iTerm2 / Terminal.app"),
             ("app-keystroke", bool(cfg["use_applescript"]),
-             "%s (needs Accessibility)" % cfg["desktop_app_name"]),
+             f"{cfg['desktop_app_name']} (needs Accessibility)"),
         ]
     if sys.platform == "win32":
         return [("powershell-sendkeys", True, "first activatable codex.exe window")]
@@ -165,35 +163,39 @@ def injector_rows(cfg):
     ]
 
 
-def injector_summary(cfg):
+def injector_summary(cfg: WatcherConfig) -> str:
+    """One-line injector availability summary for status output."""
     parts = []
     for name, ok, _ in injector_rows(cfg):
         mark = style(_symbol("ok"), "green") if ok else style(_symbol("fail"), "red")
-        parts.append("%s %s" % (name, mark))
+        parts.append(f"{name} {mark}")
     return " · ".join(parts)
 
 
-def human_size(path):
+def human_size(path: str) -> str:
+    """Format a file size for display; "?" when the file is unreadable."""
     try:
         n = os.path.getsize(path)
     except OSError:
         return "?"
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024 or unit == "GB":
-            return "%d %s" % (n, unit) if unit == "B" else "%.1f %s" % (n / 1.0, unit)
+            return f"{n:d} {unit}" if unit == "B" else f"{n:.1f} {unit}"
         n /= 1024.0
-    return "%d B" % n
+    return f"{n} B"  # Defensive; the GB branch above always returns.
 
 
-def service_desc():
+def service_desc() -> str:
+    """Short service-manager label for this platform."""
     if sys.platform == "darwin":
-        return "launchd · %s" % LABEL
+        return f"launchd · {LABEL}"
     if sys.platform == "win32":
-        return "Task Scheduler · %s" % TASK_NAME
-    return "systemd --user · %s" % UNIT
+        return f"Task Scheduler · {TASK_NAME}"
+    return f"systemd --user · {UNIT}"
 
 
-def _uptime(pid):
+def _uptime(pid: str | None) -> str | None:
+    """Process elapsed time via ps, or None when unavailable."""
     if not pid or not str(pid).isdigit():
         return None
     rc, out, _ = run(["ps", "-o", "etime=", "-p", str(pid)])
@@ -240,20 +242,23 @@ WantedBy=default.target
 """
 
 
-def _gui_target():
-    return "gui/%d/%s" % (os.getuid(), LABEL)
+def _gui_target() -> str:
+    """launchd gui-domain target for this user and label."""
+    return f"gui/{os.getuid()}/{LABEL}"
 
 
-def darwin_install_service():
+def darwin_install_service() -> tuple[bool, str]:
+    """Write the plist and bootstrap it; returns (ok, error)."""
     os.makedirs(os.path.dirname(PLIST), exist_ok=True)
     with open(PLIST, "w") as f:
         f.write(PLIST_TEMPLATE % (LABEL, sys.executable, DAEMON, LOG_PATH, LOG_PATH))
     run(["launchctl", "bootout", _gui_target()])
-    rc, _, e = run(["launchctl", "bootstrap", "gui/%d" % os.getuid(), PLIST])
+    rc, _, e = run(["launchctl", "bootstrap", f"gui/{os.getuid()}", PLIST])
     return rc == 0, e
 
 
-def darwin_remove_service():
+def darwin_remove_service() -> bool:
+    """Boot out and delete the plist; True if one existed."""
     was_installed = os.path.exists(PLIST)
     run(["launchctl", "bootout", _gui_target()])
     try:
@@ -263,20 +268,23 @@ def darwin_remove_service():
     return was_installed
 
 
-def darwin_start():
+def darwin_start() -> tuple[bool, str]:
+    """Bootstrap and kickstart the agent; returns (ok, error)."""
     if not os.path.exists(PLIST):
         return False, "not installed; run: codex-autocontinue install"
-    run(["launchctl", "bootstrap", "gui/%d" % os.getuid(), PLIST])
+    run(["launchctl", "bootstrap", f"gui/{os.getuid()}", PLIST])
     rc, _, e = run(["launchctl", "kickstart", "-k", _gui_target()])
     return rc == 0, e
 
 
-def darwin_stop():
+def darwin_stop() -> bool:
+    """Boot the agent out; True when launchctl succeeded."""
     rc, _, _ = run(["launchctl", "bootout", _gui_target()])
     return rc == 0
 
 
-def darwin_pid():
+def darwin_pid() -> str | None:
+    """Running agent pid from launchctl, or None when absent."""
     rc, out, _ = run(["launchctl", "print", _gui_target()])
     if rc != 0:
         return None
@@ -284,10 +292,11 @@ def darwin_pid():
     return m.group(1) if m else "?"
 
 
-def linux_install_service():
+def linux_install_service() -> tuple[bool, str]:
+    """Write the user unit and enable it now; returns (ok, error)."""
     if shutil.which("systemctl") is None:
-        return False, "systemctl not found; run the daemon manually: %s %s" % (
-            sys.executable, DAEMON)
+        return False, (f"systemctl not found; run the daemon manually: "
+                         f"{sys.executable} {DAEMON}")
     os.makedirs(UNIT_DIR, exist_ok=True)
     with open(os.path.join(UNIT_DIR, UNIT), "w") as f:
         f.write(UNIT_TEMPLATE % (sys.executable, DAEMON, LOG_PATH, LOG_PATH))
@@ -296,7 +305,8 @@ def linux_install_service():
     return rc == 0, e
 
 
-def linux_remove_service():
+def linux_remove_service() -> bool:
+    """Disable the unit now and delete it; True if one existed."""
     path = os.path.join(UNIT_DIR, UNIT)
     was_installed = os.path.exists(path)
     run(["systemctl", "--user", "disable", "--now", UNIT])
@@ -308,34 +318,36 @@ def linux_remove_service():
     return was_installed
 
 
-def linux_start():
+def linux_start() -> tuple[bool, str]:
+    """Restart the user unit; returns (ok, error)."""
     if not os.path.exists(os.path.join(UNIT_DIR, UNIT)):
         return False, "not installed; run: codex-autocontinue install"
     rc, _, e = run(["systemctl", "--user", "restart", UNIT])
     return rc == 0, e
 
 
-def linux_stop():
+def linux_stop() -> bool:
+    """Stop the user unit; True when systemctl succeeded."""
     rc, _, _ = run(["systemctl", "--user", "stop", UNIT])
     return rc == 0
 
 
-def linux_pid():
-    rc = subprocess.run(
-        ["systemctl", "--user", "is-active", "--quiet", UNIT],
-        capture_output=True,
-    ).returncode
+def linux_pid() -> str | None:
+    """MainPID of the active unit, "?" when unknown, None when inactive."""
+    rc, _, _ = run(["systemctl", "--user", "is-active", "--quiet", UNIT])
     if rc != 0:
         return None
     rc, pid, _ = run(["systemctl", "--user", "show", "-p", "MainPID", "--value", UNIT])
     return pid if rc == 0 and pid and pid != "0" else "?"
 
 
-def _ps(script):
+def _ps(script: str) -> CommandResult:
+    """Run a PowerShell snippet with a 60s timeout."""
     return run(["powershell", "-NoProfile", "-Command", script], timeout=60)
 
 
-def win_install_service():
+def win_install_service() -> tuple[bool, str]:
+    """Register the logon task and start it; returns (ok, error)."""
     exe = sys.executable.replace("'", "''")
     daemon = DAEMON.replace("'", "''")
     repo = REPO.replace("'", "''")
@@ -350,7 +362,8 @@ def win_install_service():
     return rc == 0, e
 
 
-def win_remove_service():
+def win_remove_service() -> bool:
+    """Stop and unregister the task; True if one existed."""
     rc, out, _ = _ps(
         "$t = Get-ScheduledTask -TaskName '%s' -ErrorAction SilentlyContinue; "
         "if ($t) { Stop-ScheduledTask -TaskName '%s' -ErrorAction SilentlyContinue; "
@@ -360,21 +373,24 @@ def win_remove_service():
     return out == "yes"
 
 
-def win_start():
+def win_start() -> tuple[bool, str]:
+    """Start the scheduled task; returns (ok, error)."""
     if win_status() is None:
         return False, "not installed; run: codex-autocontinue install"
-    rc, _, e = _ps("Start-ScheduledTask -TaskName '%s'" % TASK_NAME)
+    rc, _, e = _ps(f"Start-ScheduledTask -TaskName '{TASK_NAME}'")
     return rc == 0, e
 
 
-def win_stop():
+def win_stop() -> bool:
+    """Stop the scheduled task; True when the call succeeded."""
     rc, _, _ = _ps(
-        "Stop-ScheduledTask -TaskName '%s' -ErrorAction SilentlyContinue" % TASK_NAME
+        f"Stop-ScheduledTask -TaskName '{TASK_NAME}' -ErrorAction SilentlyContinue"
     )
     return rc == 0
 
 
-def win_status():
+def win_status() -> str | None:
+    """Scheduled task state string, or None when the task is missing."""
     rc, out, _ = _ps(
         "$t = Get-ScheduledTask -TaskName '%s' -ErrorAction SilentlyContinue; "
         "if ($t) { $t.State.ToString() }" % TASK_NAME
@@ -382,7 +398,8 @@ def win_status():
     return out if rc == 0 and out else None
 
 
-def install_service():
+def install_service() -> tuple[bool, str]:
+    """Register the watcher with this platform's service manager."""
     if sys.platform == "darwin":
         return darwin_install_service()
     if sys.platform == "win32":
@@ -390,7 +407,8 @@ def install_service():
     return linux_install_service()
 
 
-def remove_service():
+def remove_service() -> bool:
+    """Remove the watcher service; True if one existed."""
     if sys.platform == "darwin":
         return darwin_remove_service()
     if sys.platform == "win32":
@@ -398,7 +416,8 @@ def remove_service():
     return linux_remove_service()
 
 
-def start_service():
+def start_service() -> tuple[bool, str]:
+    """Start (or restart) the watcher service."""
     if sys.platform == "darwin":
         return darwin_start()
     if sys.platform == "win32":
@@ -406,7 +425,8 @@ def start_service():
     return linux_start()
 
 
-def stop_service():
+def stop_service() -> bool:
+    """Stop the watcher service (it stays installed)."""
     if sys.platform == "darwin":
         return darwin_stop()
     if sys.platform == "win32":
@@ -414,7 +434,7 @@ def stop_service():
     return linux_stop()
 
 
-def service_pid():
+def service_pid() -> str | None:
     """Running pid, or None when not running/installed."""
     if sys.platform == "darwin":
         return darwin_pid()
@@ -423,7 +443,8 @@ def service_pid():
     return linux_pid()
 
 
-def service_installed():
+def service_installed() -> bool:
+    """True when the watcher service is registered."""
     if sys.platform == "darwin":
         return os.path.exists(PLIST)
     if sys.platform == "win32":
@@ -438,17 +459,18 @@ PATH_LINE_POSIX = 'export PATH="$HOME/.local/bin:$PATH"'
 PATH_LINE_FISH = "fish_add_path $HOME/.local/bin"
 
 
-def _login_shell():
+def _login_shell() -> str:
+    """Login shell name (via dscl on macOS, else $SHELL)."""
     if sys.platform == "darwin":
         rc, out, _ = run(["dscl", ".", "-read",
-                          "/Users/%s" % os.environ.get("USER", ""), "UserShell"])
+                          f"/Users/{os.environ.get('USER', '')}", "UserShell"])
         m = re.search(r"UserShell:\s*(\S+)", out)
         if m:
             return os.path.basename(m.group(1))
     return os.path.basename(os.environ.get("SHELL", ""))
 
 
-def setup_path():
+def setup_path() -> tuple[str, bool]:
     """Symlink the wrapper into ~/.local/bin and make sure that dir is on PATH.
 
     Returns (detail, needs_new_shell)."""
@@ -464,7 +486,7 @@ def setup_path():
     rc_name = {"zsh": ".zshrc", "bash": ".bash_profile",
                "fish": ".config/fish/config.fish"}.get(shell)
     if not rc_name:
-        return "%s (add %s to PATH manually)" % (dst, BIN_DIR), True
+        return f"{dst} (add {BIN_DIR} to PATH manually)", True
     rc_path = str(Path.home() / rc_name)
     line = PATH_LINE_FISH if shell == "fish" else PATH_LINE_POSIX
     try:
@@ -473,16 +495,16 @@ def setup_path():
             with open(rc_path) as f:
                 existing = f.read()
         if ".local/bin" in existing:
-            return "%s (~/.local/bin already in %s)" % (dst, rc_name), True
+            return f"{dst} (~/.local/bin already in {rc_name})", True
         os.makedirs(os.path.dirname(rc_path), exist_ok=True)
         with open(rc_path, "a") as f:
             f.write(line + "\n")
-        return "%s (PATH added to %s)" % (dst, rc_name), True
+        return f"{dst} (PATH added to {rc_name})", True
     except OSError as e:
-        return "%s (could not edit %s: %s)" % (dst, rc_name, e), True
+        return f"{dst} (could not edit {rc_name}: {e})", True
 
 
-def teardown_path():
+def teardown_path() -> str | None:
     """Remove the ~/.local/bin symlink. Returns detail string or None."""
     dst = os.path.join(BIN_DIR, "codex-autocontinue")
     if os.path.lexists(dst):
@@ -491,7 +513,8 @@ def teardown_path():
     return None
 
 
-def rc_files_with_path_line():
+def rc_files_with_path_line() -> list[str]:
+    """Shell rc files containing our PATH line."""
     hits = []
     home = str(Path.home())
     for name in RC_FILES:
@@ -506,7 +529,8 @@ def rc_files_with_path_line():
     return hits
 
 
-def purge_rc_lines():
+def purge_rc_lines() -> list[str]:
+    """Remove our PATH lines from shell rc files; returns cleaned paths."""
     cleaned = []
     for path in rc_files_with_path_line():
         try:
@@ -522,7 +546,8 @@ def purge_rc_lines():
     return cleaned
 
 
-def _win_get_user_path():
+def _win_get_user_path() -> str:
+    """Current user PATH from HKCU Environment."""
     import winreg
 
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
@@ -534,7 +559,8 @@ def _win_get_user_path():
     return value
 
 
-def _win_set_user_path(value):
+def _win_set_user_path(value: str) -> None:
+    """Write the user PATH to HKCU Environment."""
     import winreg
 
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
@@ -542,16 +568,18 @@ def _win_set_user_path(value):
         winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, value)
 
 
-def win_setup_path():
+def win_setup_path() -> tuple[str, bool]:
+    """Add the repo dir to the user PATH; returns (detail, needs_new_shell)."""
     parts = [p for p in _win_get_user_path().split(";") if p]
     if REPO not in parts:
         parts.append(REPO)
         _win_set_user_path(";".join(parts))
-        return "%s (added to user PATH)" % REPO, True
+        return f"{REPO} (added to user PATH)", True
     return REPO, False
 
 
-def win_teardown_path():
+def win_teardown_path() -> str:
+    """Remove the repo dir from the user PATH; returns the dir."""
     parts = [p for p in _win_get_user_path().split(";") if p and p != REPO]
     _win_set_user_path(";".join(parts))
     return REPO
@@ -560,7 +588,8 @@ def win_teardown_path():
 # ---- log rendering --------------------------------------------------------
 
 
-def colorize_log(line):
+def colorize_log(line: str) -> str:
+    """Highlight one log line by severity keyword."""
     if "auto-continue injected" in line:
         return style(line, "green")
     if "FAILED" in line:
@@ -574,7 +603,8 @@ def colorize_log(line):
     return line
 
 
-def log_stats():
+def log_stats() -> tuple[int, str | None]:
+    """(auto-continue count, last timestamp) scanned from the log."""
     count = 0
     last = None
     try:
@@ -591,7 +621,8 @@ def log_stats():
 # ---- macOS permission flow (priming runs in the daemon; the CLI orchestrates) --
 
 
-def _perm_short(key):
+def _perm_short(key: str) -> str:
+    """Short display label for a permission target key."""
     if key.startswith("automation:"):
         return key[len("automation:"):]
     if key == "accessibility:keystroke":
@@ -599,7 +630,7 @@ def _perm_short(key):
     return key
 
 
-def guided_prime():
+def guided_prime() -> tuple[dict[str, Any] | None, bool]:
     """Force a daemon-side re-prime and walk through Apple's dialogs.
 
     Returns (state, complete); state is None when non-interactive (priming
@@ -628,7 +659,7 @@ def guided_prime():
     return permissions.wait_for_state(timeout=30)
 
 
-def permission_report(state, complete):
+def permission_report(state: dict[str, Any] | None, complete: bool) -> bool:
     """Render the daemon-context permission state. True when all applicable granted."""
     header("Permissions")
     if not state or not state.get("targets"):
@@ -642,21 +673,20 @@ def permission_report(state, complete):
         if st == permissions.GRANTED:
             step(True, label, detail)
         elif st in (permissions.SKIPPED_RUNNING, permissions.SKIPPED_DISABLED):
-            line = "  %s %s" % (style(_symbol("bullet"), "dim"), label.ljust(20))
+            line = f"  {style(_symbol('bullet'), 'dim')} {label.ljust(20)}"
             if detail:
                 line += style(detail, "dim")
             print(line)
         else:
-            step(False, label, "(%s) %s" % (st, detail))
+            step(False, label, f"({st}) {detail}")
     granted, total, blocking = permissions.summarize(state)
     print()
     if blocking:
-        print("  %s" % style("%d of %d granted" % (granted, total), "yellow", "bold"))
+        print(f"  {style(f'{granted} of {total} granted', 'yellow', 'bold')}")
         bullet("allow the remaining dialogs (or enable in System Settings), then:")
         print("    codex-autocontinue doctor --fix")
     else:
-        print("  %s" % style("All %d applicable permissions granted." % total,
-                             "green", "bold"))
+        print(f"  {style(f'All {total} applicable permissions granted.', 'green', 'bold')}")
     if not complete:
         bullet("priming may still be running — re-check with: codex-autocontinue doctor")
     return not blocking
@@ -665,7 +695,15 @@ def permission_report(state, complete):
 # ---- commands -------------------------------------------------------------
 
 
-def cmd_install(args):
+def cmd_install(args: argparse.Namespace) -> int:
+    """Register, start, and self-check the watcher installation.
+
+    Args:
+        args: Parsed CLI namespace (no install-specific flags).
+
+    Returns:
+        Exit status.
+    """
     cfg = load_config()
     header("Installing codex-autocontinue")
 
@@ -676,7 +714,7 @@ def cmd_install(args):
         return 1
     pid = service_pid()
     step(pid is not None, "Watcher started",
-         "pid %s" % pid if pid else "not running yet; check: codex-autocontinue status")
+         f"pid {pid}" if pid else "not running yet; check: codex-autocontinue status")
 
     if sys.platform == "win32":
         detail, new_shell = win_setup_path()
@@ -698,11 +736,11 @@ def cmd_install(args):
             permission_report(prime_state, prime_complete)
 
     print()
-    print(style("%s Installed." % _symbol("ok"), "green", "bold"))
+    print(style(f"{_symbol('ok')} Installed.", "green", "bold"))
     if cfg["dry_run"]:
         kv("mode", style("DRY-RUN", "yellow") + style(" — logs what it would do, injects nothing", "dim"))
     else:
-        kv("mode", style("LIVE", "green") + style(" — replies %r automatically" % cfg["reply"], "dim"))
+        kv("mode", style("LIVE", "green") + style(f" — replies {cfg['reply']!r} automatically", "dim"))
     kv("service", service_desc() + style(" (starts at login)", "dim"))
     kv("config", CONFIG_PATH)
     kv("logs", "codex-autocontinue logs")
@@ -724,12 +762,21 @@ def cmd_install(args):
     if next_steps:
         header("Next steps")
         for i, s in enumerate(next_steps, 1):
-            print("  %d. %s" % (i, s))
+            print(f"  {i}. {s}")
     print()
     return 0
 
 
-def cmd_uninstall(args):
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    """Stop and remove the service plus PATH entry, listing leftovers.
+
+    Args:
+        args: Parsed CLI namespace; uses args.purge to also remove the
+            log and shell rc PATH lines.
+
+    Returns:
+        Exit status.
+    """
     header("Uninstalling codex-autocontinue")
 
     was_installed = remove_service()
@@ -743,10 +790,10 @@ def cmd_uninstall(args):
 
     leftovers = []
     if os.path.exists(LOG_PATH):
-        leftovers.append("%s (%s)" % (LOG_PATH, human_size(LOG_PATH)))
+        leftovers.append(f"{LOG_PATH} ({human_size(LOG_PATH)})")
     if sys.platform != "win32":
         for path in rc_files_with_path_line():
-            leftovers.append("~/.local/bin PATH line in %s" % path)
+            leftovers.append(f"~/.local/bin PATH line in {path}")
 
     if args.purge:
         if os.path.exists(LOG_PATH):
@@ -760,45 +807,70 @@ def cmd_uninstall(args):
             step(True, "Shell rc cleaned",
                  ", ".join(cleaned) if cleaned else "nothing to remove")
         print()
-        print(style("%s Uninstalled — no trace left." % _symbol("ok"), "green", "bold"))
+        print(style(f"{_symbol('ok')} Uninstalled — no trace left.", "green", "bold"))
     else:
         print()
-        print(style("%s Uninstalled." % _symbol("ok"), "green", "bold"))
+        print(style(f"{_symbol('ok')} Uninstalled.", "green", "bold"))
         if leftovers:
             print()
             print(style("Left behind", "bold")
                   + style(" (remove with: codex-autocontinue uninstall --purge)", "dim"))
             for item in leftovers:
                 bullet(item)
-        print(style("Repo left in place at %s (delete manually if unwanted)." % REPO, "dim"))
+        print(style(f"Repo left in place at {REPO} (delete manually if unwanted).", "dim"))
     print()
     return 0
 
 
-def cmd_start(args):
+def cmd_start(args: argparse.Namespace) -> int:
+    """Start (or restart) the watcher.
+
+    Args:
+        args: Parsed CLI namespace (no start-specific flags).
+
+    Returns:
+        Exit status.
+    """
     ok, e = start_service()
     if not ok:
         err(e or "could not start the watcher")
         return 1
     pid = service_pid()
-    print("%s %s" % (style(_symbol("ok"), "green", "bold"),
-                     "watcher running (pid %s)" % pid if pid else "watcher started"))
+    mark = style(_symbol("ok"), "green", "bold")
+    detail = f"watcher running (pid {pid})" if pid else "watcher started"
+    print(f"{mark} {detail}")
     return 0
 
 
-def cmd_stop(args):
+def cmd_stop(args: argparse.Namespace) -> int:
+    """Stop the watcher (it stays installed, and starts again at login).
+
+    Args:
+        args: Parsed CLI namespace (no stop-specific flags).
+
+    Returns:
+        Exit status.
+    """
     was_running = service_pid() is not None
     stop_service()
     if was_running:
-        print("%s stopped — still installed; starts again at login "
-              "('codex-autocontinue start' to resume now)"
-              % style(_symbol("ok"), "green", "bold"))
+        mark = style(_symbol("ok"), "green", "bold")
+        print(f"{mark} stopped — still installed; starts again at login "
+              "('codex-autocontinue start' to resume now)")
     else:
         print("not running")
     return 0
 
 
-def cmd_status(args):
+def cmd_status(args: argparse.Namespace) -> int:
+    """Show running state, mode, injectors, permissions, and log tail.
+
+    Args:
+        args: Parsed CLI namespace (no status-specific flags).
+
+    Returns:
+        Exit status.
+    """
     cfg = load_config()
     pid = service_pid()
     installed = service_installed()
@@ -807,10 +879,10 @@ def cmd_status(args):
     if pid:
         state = style("running", "green")
         if pid != "?":
-            state += style(" · pid %s" % pid, "dim")
+            state += style(f" · pid {pid}", "dim")
             up = _uptime(pid)
             if up:
-                state += style(" · up %s" % up, "dim")
+                state += style(f" · up {up}", "dim")
     elif installed:
         state = style("stopped", "yellow") + style(" · installed, starts at login", "dim")
     else:
@@ -831,16 +903,16 @@ def cmd_status(args):
                + style(" · run: codex-autocontinue doctor --fix", "dim"))
         elif blocking:
             short = ", ".join(_perm_short(k) for k in blocking)
-            kv("permissions", style("%d/%d granted" % (granted, total), "yellow")
-               + style(" · blocked: %s" % short, "dim"))
+            kv("permissions", style(f"{granted}/{total} granted", "yellow")
+               + style(f" · blocked: {short}", "dim"))
         else:
-            kv("permissions", style("%d/%d granted" % (granted, total), "green"))
+            kv("permissions", style(f"{granted}/{total} granted", "green"))
 
     if os.path.exists(LOG_PATH):
         count, last = log_stats()
-        value = "%d" % count
+        value = f"{count}"
         if last:
-            value += style(" · last %s" % last, "dim")
+            value += style(f" · last {last}", "dim")
         kv("continues", value)
         with open(LOG_PATH, errors="replace") as f:
             tail = list(deque(f, maxlen=3))
@@ -852,7 +924,16 @@ def cmd_status(args):
     return 0
 
 
-def cmd_doctor(args):
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Check macOS permissions and injector health.
+
+    Args:
+        args: Parsed CLI namespace; uses args.fix to re-run guided
+            permission priming.
+
+    Returns:
+        Exit status.
+    """
     cfg = load_config()
     if sys.platform != "darwin":
         header("codex-autocontinue doctor")
@@ -871,12 +952,24 @@ def cmd_doctor(args):
     return 0
 
 
-def cmd_logs(args):
-    open(LOG_PATH, "a").close()
-    n = args.lines if args.lines is not None else 50
+def cmd_logs(args: argparse.Namespace) -> int:
+    """Print the watcher log tail, following it unless -n was given.
+
+    Args:
+        args: Parsed CLI namespace; uses args.lines for the tail length
+            and args.follow to keep following.
+
+    Returns:
+        Exit status.
+    """
+    Path(LOG_PATH).touch()
+    n = max(0, args.lines) if args.lines is not None else 50
     follow = args.follow or args.lines is None
     if follow:
-        sys.stdout.reconfigure(line_buffering=True)
+        try:
+            sys.stdout.reconfigure(line_buffering=True)
+        except (AttributeError, ValueError):
+            pass  # StringIO and closed streams have no reconfigure.
     with open(LOG_PATH, errors="replace") as f:
         for line in deque(f, maxlen=n):
             print(colorize_log(line.rstrip("\n")))
@@ -894,7 +987,7 @@ def cmd_logs(args):
             return 0
 
 
-_COMMANDS = {
+_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "install": cmd_install,
     "uninstall": cmd_uninstall,
     "start": cmd_start,
@@ -905,7 +998,8 @@ _COMMANDS = {
 }
 
 
-def main(argv):
+def main(argv: Sequence[str]) -> int:
+    """Parse argv and dispatch to a subcommand; returns the exit status."""
     parser = argparse.ArgumentParser(
         prog="codex-autocontinue",
         description="Background watcher that replies 'continue' when Codex hits the model capacity limit.",

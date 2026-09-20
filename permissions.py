@@ -11,11 +11,15 @@ Background (Apple TCC rules):
 - Results cross from daemon to CLI via permissions.json next to this file.
 """
 
+from __future__ import annotations
+
 import json
 import os
-import subprocess
 import sys
 import time
+from typing import Any, Callable, Sequence
+
+from util import CommandResult, WatcherConfig, run
 
 REPO = os.path.dirname(os.path.abspath(__file__))
 PERMISSIONS_PATH = os.path.join(REPO, "permissions.json")
@@ -23,7 +27,15 @@ MARKER_PATH = os.path.join(REPO, ".permissions-primed")
 
 # osascript blocks while its Allow dialog is unanswered; the daemon primes in
 # a background thread so a generous timeout is safe. Overridable for tests.
-PROBE_TIMEOUT = int(os.environ.get("CODEX_PRIME_TIMEOUT", "120"))
+def _probe_timeout() -> int:
+    """Probe timeout from the environment, 120 on missing/garbage values."""
+    try:
+        return int(os.environ.get("CODEX_PRIME_TIMEOUT", "120"))
+    except (ValueError, TypeError):
+        return 120
+
+
+PROBE_TIMEOUT = _probe_timeout()
 
 GRANTED = "granted"
 DENIED = "denied"
@@ -34,31 +46,34 @@ UNKNOWN = "unknown"
 
 _OK_STATES = (GRANTED, SKIPPED_RUNNING, SKIPPED_DISABLED)
 
-
-def _run(cmd, timeout):
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
-    except subprocess.TimeoutExpired:
-        return 124, "", "probe timed out (dialog unanswered?)"
-    except OSError as e:
-        return 1, "", str(e)
+# osascript stderr markers for TCC denials.
+_TCC_NO_AUTOMATION = "-1743"
+_TCC_NO_ACCESSIBILITY = "-25211"
+# Synthetic returncode when a probe dialog sits unanswered past its timeout.
+_TIMEOUT_RC = 124
 
 
-def _esc(s):
+def _run(cmd: Sequence[str], timeout: float) -> CommandResult:
+    """Run a permission probe; timeouts report 124 (see util.run)."""
+    return run(cmd, timeout=timeout, timeout_returncode=_TIMEOUT_RC,
+               timeout_stderr="probe timed out (dialog unanswered?)")
+
+
+def _esc(s: str) -> str:
+    """Escape a string for embedding in an AppleScript literal."""
     return str(s).replace("\\", "\\\\").replace('"', '\\"')
 
 
-def app_is_running(app):
+def app_is_running(app: str) -> bool:
     """Prompt-free check: never targets the app, so it never prompts/launches."""
     if sys.platform != "darwin":
         return False
     rc, out, _ = _run(["osascript", "-e",
-                       'application "%s" is running' % _esc(app)], 10)
+                       f'application "{_esc(app)}" is running'], 10)
     return rc == 0 and out == "true"
 
 
-def probe_automation(app, timeout=None):
+def probe_automation(app: str, timeout: float | None = None) -> tuple[str, str]:
     """Send a harmless AppleEvent to `app`; returns (state, detail).
 
     Prompts if and only if consent is undetermined (macOS shows the dialog and
@@ -70,38 +85,39 @@ def probe_automation(app, timeout=None):
     if app == "System Events":
         script = 'tell application "System Events" to get name of first process'
     else:
-        script = 'tell application "%s" to get version' % _esc(app)
+        script = f'tell application "{_esc(app)}" to get version'
     rc, out, err = _run(["osascript", "-e", script], timeout or PROBE_TIMEOUT)
     if rc == 0:
         return GRANTED, out or "ok"
-    if rc == 124:
+    if rc == _TIMEOUT_RC:
         return UNKNOWN, "prompt unanswered (timed out)"
-    if "-1743" in err or "not allowed to send apple events" in err.lower():
+    if _TCC_NO_AUTOMATION in err or "not allowed to send apple events" in err.lower():
         return DENIED, "denied — enable in System Settings > Privacy & Security > Automation"
     # Any other error means the event was delivered (consent recorded) but the
     # app didn't understand this harmless probe (e.g. not scriptable).
     short = (err.splitlines() or [""])[0][:100]
-    return GRANTED, "consent recorded (probe reply: %s)" % (short or "unhandled")
+    return GRANTED, f"consent recorded (probe reply: {short or 'unhandled'})"
 
 
-def probe_accessibility(timeout=None):
+def probe_accessibility(timeout: float | None = None) -> tuple[str, str]:
     """Empty keystroke: exercises the Accessibility path without typing anything."""
     rc, _, err = _run(["osascript", "-e",
                        'tell application "System Events" to keystroke ""'],
                       timeout or PROBE_TIMEOUT)
     if rc == 0:
         return GRANTED, "ok"
-    if rc == 124:
+    if rc == _TIMEOUT_RC:
         return UNKNOWN, "prompt unanswered (timed out)"
-    if "-25211" in err or "assistive access" in err.lower():
+    if _TCC_NO_ACCESSIBILITY in err or "assistive access" in err.lower():
         return DENIED, "denied — enable in System Settings > Privacy & Security > Accessibility"
-    if "-1743" in err:
+    if _TCC_NO_AUTOMATION in err:
         return BLOCKED, "needs Automation for System Events first"
     short = (err.splitlines() or [""])[0][:100]
     return UNKNOWN, short or "unexpected reply"
 
 
-def _save(state):
+def _save(state: dict[str, Any]) -> None:
+    """Atomically write priming state; write failures are ignored."""
     tmp = PERMISSIONS_PATH + ".tmp"
     try:
         with open(tmp, "w") as f:
@@ -111,7 +127,8 @@ def _save(state):
         pass
 
 
-def load_state():
+def load_state() -> dict[str, Any] | None:
+    """Load saved priming state, or None when missing or invalid."""
     try:
         with open(PERMISSIONS_PATH) as f:
             data = json.load(f)
@@ -120,18 +137,20 @@ def load_state():
         return None
 
 
-def is_primed():
+def is_primed() -> bool:
+    """True once every applicable permission has been granted."""
     return os.path.exists(MARKER_PATH)
 
 
-def clear_marker():
+def clear_marker() -> None:
+    """Drop the primed marker so the next run re-primes."""
     try:
         os.remove(MARKER_PATH)
     except OSError:
         pass
 
 
-def summarize(state):
+def summarize(state: dict[str, Any] | None) -> tuple[int, int, list[str]]:
     """(granted, total, blocking) over applicable (non-skipped) targets."""
     targets = (state or {}).get("targets", {})
     applicable = {k: v for k, v in targets.items()
@@ -141,7 +160,7 @@ def summarize(state):
     return granted, len(applicable), blocking
 
 
-def prime_all(cfg, log=None):
+def prime_all(cfg: WatcherConfig, log: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Run every applicable probe, saving state after each; returns state.
 
     Creates the primed marker only when nothing applicable is left denied /
@@ -161,10 +180,10 @@ def prime_all(cfg, log=None):
 
     state = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "targets": {}}
     for app in targets:
-        key = "automation:%s" % app
+        key = f"automation:{app}"
         st, detail = probe_automation(app)
         state["targets"][key] = {"state": st, "detail": detail}
-        say("prime %s -> %s (%s)" % (key, st, detail))
+        say(f"prime {key} -> {st} ({detail})")
         _save(state)
 
     if not inject_app:
@@ -174,7 +193,7 @@ def prime_all(cfg, log=None):
     else:
         ax = probe_accessibility()
     state["targets"]["accessibility:keystroke"] = {"state": ax[0], "detail": ax[1]}
-    say("prime accessibility:keystroke -> %s (%s)" % ax)
+    say(f"prime accessibility:keystroke -> {ax[0]} ({ax[1]})")
     state["done"] = True
     _save(state)
 
@@ -190,7 +209,7 @@ def prime_all(cfg, log=None):
     return state
 
 
-def wait_for_state(timeout=30, poll=0.5):
+def wait_for_state(timeout: float = 30, poll: float = 0.5) -> tuple[dict[str, Any] | None, bool]:
     """Poll until priming finishes (marker or done flag) or timeout.
 
     Returns (state, complete); complete is False only when the daemon is
@@ -218,7 +237,8 @@ _FALLBACK_URLS = [
 ]
 
 
-def _open_best(urls):
+def _open_best(urls: Sequence[str]) -> bool:
+    """Open the first reachable Settings URL; True when one opened."""
     for url in urls:
         rc, _, _ = _run(["open", url], 10)
         if rc == 0:
@@ -226,7 +246,7 @@ def _open_best(urls):
     return False
 
 
-def open_settings_panes():
+def open_settings_panes() -> bool:
     """Open the Automation + Accessibility panes (best effort, macOS only).
 
     System Settings shows one pane at a time, so this lands on Accessibility
