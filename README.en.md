@@ -24,7 +24,7 @@ You never have to type `continue` manually again.
 1. Polls `~/.codex/logs_2.sqlite` for newly logged "model is at capacity" events (never touches backlog from before it started).
 2. Finds the affected session's rollout file and works out whether it's a Codex CLI session (tmux / iTerm2 / Terminal.app) or the ChatGPT desktop app.
 3. Skips the session if it already has queued messages — stacked messages will drive it anyway.
-4. Types `continue` into exactly that session/window via `injectors.py` (tmux send-keys, AppleScript, xdotool, ydotool, or PowerShell SendKeys depending on platform).
+4. Types `continue` into exactly that session/window via `src/injectors.py` (tmux send-keys, AppleScript, xdotool, ydotool, or PowerShell SendKeys depending on platform).
 5. Writes one line per action to `watcher.log`. No notifications, no UI, no focus stealing.
 
 ## Platform support

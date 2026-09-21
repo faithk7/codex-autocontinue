@@ -68,8 +68,8 @@ def run(
 
 
 def repo_dir() -> str:
-    """Directory containing this checkout (util.py lives at the repo root)."""
-    return os.path.dirname(os.path.abspath(__file__))
+    """Directory containing this checkout (util.py lives in src/, one level down)."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def config_path() -> str:

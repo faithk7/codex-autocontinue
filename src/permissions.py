@@ -23,9 +23,9 @@ import threading
 import time
 from typing import Any, Callable, Sequence
 
-from util import CommandResult, WatcherConfig, run
+from util import CommandResult, WatcherConfig, repo_dir, run
 
-REPO = os.path.dirname(os.path.abspath(__file__))
+REPO = repo_dir()
 PERMISSIONS_PATH = os.path.join(REPO, "permissions.json")
 MARKER_PATH = os.path.join(REPO, ".permissions-primed")
 

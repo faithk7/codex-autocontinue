@@ -1,7 +1,7 @@
 #!/bin/bash
 # codex-autocontinue — thin shim (macOS / Linux).
 # All commands are implemented in Python: codex-autocontinue.py dispatches
-# subcommands to cli.py. This script only locates the repo and python3.
+# subcommands to src/cli.py. This script only locates the repo and python3.
 # Windows: use codex-autocontinue.ps1 instead.
 set -euo pipefail
 

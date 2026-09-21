@@ -24,7 +24,7 @@
 1. 轮询 `~/.codex/logs_2.sqlite`，只处理新产生的 "model is at capacity" 日志（不会处理启动前的历史记录）。
 2. 根据会话的 rollout 文件判断它是 Codex CLI 会话（tmux / iTerm2 / Terminal.app）还是 ChatGPT 桌面应用。
 3. 如果会话里已有排队消息，则保持静默——排队的消息自然会驱动会话继续。
-4. 通过 `injectors.py` 把 `continue` 精确输入到对应的会话/窗口（按平台使用 tmux send-keys、AppleScript、xdotool、ydotool 或 PowerShell SendKeys）。
+4. 通过 `src/injectors.py` 把 `continue` 精确输入到对应的会话/窗口（按平台使用 tmux send-keys、AppleScript、xdotool、ydotool 或 PowerShell SendKeys）。
 5. 每次动作只向 `watcher.log` 写一行日志。无通知、无界面、不抢焦点。
 
 ## 平台支持

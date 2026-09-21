@@ -1,6 +1,6 @@
 # codex-autocontinue — thin shim (Windows).
 # All commands are implemented in Python: codex-autocontinue.py dispatches
-# subcommands to cli.py. This script only locates python and forwards args.
+# subcommands to src/cli.py. This script only locates python and forwards args.
 $ErrorActionPreference = "Stop"
 $Repo = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Daemon = Join-Path $Repo "codex-autocontinue.py"
