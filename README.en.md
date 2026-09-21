@@ -141,24 +141,6 @@ Edit `config.json` in the repo:
 | `use_xdotool` | `true` | Use xdotool on Linux/X11 when available |
 | `use_ydotool` | `true` | Use ydotool on Linux/Wayland when available |
 
-## Safety
-
-- Triggers only on the exact (configurable) capacity phrase.
-- Sends input to the exact session/window it belongs to — never an unrelated window (but see the ydotool / Windows caveats below).
-- Never acts on events logged before the watcher started.
-- Per-session cooldown + global hourly cap, so it can never spam input.
-- Queue-aware: stays silent when stacked messages will drive the session.
-- `dry_run` mode lets you watch what it would do before trusting it.
-
-## Robustness
-
-Bad config or a missing Codex install can never crash-loop the watcher:
-
-- Corrupt `config.json` (invalid JSON, wrong shape) → falls back to built-in defaults and logs a `WARNING`. If `config.json` is missing entirely, defaults apply with `dry_run: true` (fail-safe: detect-only until you configure it).
-- Missing `~/.codex/logs_2.sqlite` (fresh machine, Codex never ran) → the watcher logs `waiting for …` and retries instead of crashing; `--simulate` exits 1 with a one-line message.
-- Invalid `poll_interval_seconds` (zero, negative, non-numeric) → clamped to the default (0.25s) with a `WARNING`. Zero would otherwise spin at 100% CPU; negative would crash.
-- Missing `desktop_app_name` → defaults to `"ChatGPT"`.
-
 ## Known limitations
 
 Found during testing; documented here so there are no surprises:

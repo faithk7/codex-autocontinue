@@ -139,24 +139,6 @@ doctor         检查 macOS 授权状态与注入方式健康度
 | `use_xdotool` | `true` | Linux/X11 上优先使用 xdotool |
 | `use_ydotool` | `true` | Linux/Wayland 上优先使用 ydotool |
 
-## 安全机制
-
-- 只匹配精确的（可配置的）容量提示短语。
-- 只向事件所属的会话/窗口发送输入——绝不会误入无关窗口（但请注意下文 ydotool / Windows 的例外）。
-- 不处理看守进程启动之前的历史事件。
-- 单会话冷却 + 全局每小时上限，绝不刷屏。
-- 队列感知：会话已有排队消息时保持静默。
-- `dry_run` 模式可以先观察它"打算做什么"，确认可信后再开启注入。
-
-## 健壮性
-
-错误的配置或缺失的 Codex 安装都不会让看守进程崩溃循环：
-
-- `config.json` 损坏（非法 JSON、结构错误）→ 回退到内置默认值并记录 `WARNING`。如果 `config.json` 完全缺失，则使用默认值，其中 `dry_run: true`（故障保护：仅检测，直到你完成配置）。
-- 缺失 `~/.codex/logs_2.sqlite`（全新机器，从未运行过 Codex）→ 看守进程记录 `waiting for …` 并重试，而不是崩溃；`--simulate` 会打印一行提示并以状态码 1 退出。
-- 非法的 `poll_interval_seconds`（零、负数、非数字）→ 钳制到默认值（0.25 秒）并记录 `WARNING`。零值会导致 100% CPU 空转，负数会导致崩溃。
-- 缺失 `desktop_app_name` → 默认使用 `"ChatGPT"`。
-
 <h2 id="known-limitations">已知限制</h2>
 
 测试中发现的问题，在此记录以免意外：
