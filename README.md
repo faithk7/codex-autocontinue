@@ -94,7 +94,7 @@ cd codex-autocontinue
 
 ## 使用方法
 
-各平台命令完全一致（安装后用 `cxac <命令>`；在检出目录中用 `./codex-autocontinue <命令>` 或 `.\cxac.ps1 <命令>`）。两个包装脚本只是薄壳——所有命令都由 Python 实现（仅标准库），带彩色输出，并遵循 `NO_COLOR` 与非 TTY 管道场景：
+各平台命令完全一致（安装后用 `cxac <命令>`；在检出目录中用 `./codex-autocontinue.sh <命令>` 或 `.\cxac.ps1 <命令>`）。两个包装脚本只是薄壳——所有命令都由 Python 实现（仅标准库），带彩色输出，并遵循 `NO_COLOR` 与非 TTY 管道场景：
 
 ```
 install        一次性：注册到系统服务管理器、启动、自检、打印后续步骤

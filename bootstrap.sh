@@ -76,7 +76,7 @@ if saved is not None:
 EOF
     rm -rf "$tmp"
     # zip does not preserve exec bits
-    chmod +x "$TARGET/codex-autocontinue" "$TARGET/codex-autocontinue.py" \
+    chmod +x "$TARGET/codex-autocontinue.sh" "$TARGET/codex-autocontinue.py" \
         "$TARGET/install.sh" "$TARGET/bootstrap.sh" 2>/dev/null || true
     ok "downloaded into $TARGET"
 }

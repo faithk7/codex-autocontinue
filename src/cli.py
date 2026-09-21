@@ -34,7 +34,7 @@ from util import (
 
 REPO = repo_dir()
 DAEMON = os.path.join(REPO, "codex-autocontinue.py")
-WRAPPER = os.path.join(REPO, "codex-autocontinue")
+WRAPPER = os.path.join(REPO, "codex-autocontinue.sh")
 CONFIG_PATH = config_path()
 LOG_PATH = log_path()
 

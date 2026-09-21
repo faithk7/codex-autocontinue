@@ -52,4 +52,4 @@ if prev="$(current_daemon 2>/dev/null)" && [ -n "$prev" ] \
     echo "note: service currently points at $(dirname "$prev"); this install moves it to $SCRIPT_DIR" >&2
 fi
 
-exec "$SCRIPT_DIR/codex-autocontinue" install
+exec "$SCRIPT_DIR/codex-autocontinue.sh" install

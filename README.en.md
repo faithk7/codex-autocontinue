@@ -94,7 +94,7 @@ Once installed, the command is on PATH as `codex-autocontinue` — or the much s
 
 ## Usage
 
-Commands are identical on every platform (`cxac <command>` once installed; `./codex-autocontinue <command>` or `.\cxac.ps1 <command>` from a checkout). Both wrappers are thin shims — all commands are implemented in Python (stdlib only) with styled output that respects `NO_COLOR` and non-TTY pipes:
+Commands are identical on every platform (`cxac <command>` once installed; `./codex-autocontinue.sh <command>` or `.\cxac.ps1 <command>` from a checkout). Both wrappers are thin shims — all commands are implemented in Python (stdlib only) with styled output that respects `NO_COLOR` and non-TTY pipes:
 
 ```
 install           one-time: register with the OS service manager, start, self-check,
