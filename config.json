@@ -7,7 +7,7 @@
     "per_thread_cooldown_seconds": 60,
     "max_continues_per_hour": 20,
     "dry_run": false,
-    "desktop_app_name": "CodexManager",
+    "desktop_app_name": "ChatGPT",
     "inject_cli": true,
     "inject_app": true,
     "use_tmux": true,

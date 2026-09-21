@@ -22,7 +22,7 @@ You never have to type `continue` manually again.
 ## How it works
 
 1. Polls `~/.codex/logs_2.sqlite` for newly logged "model is at capacity" events (never touches backlog from before it started).
-2. Finds the affected session's rollout file and works out whether it's a Codex CLI session (tmux / iTerm2 / Terminal.app) or the CodexManager desktop app.
+2. Finds the affected session's rollout file and works out whether it's a Codex CLI session (tmux / iTerm2 / Terminal.app) or the ChatGPT desktop app.
 3. Skips the session if it already has queued messages — stacked messages will drive it anyway.
 4. Types `continue` into exactly that session/window via `injectors.py` (tmux send-keys, AppleScript, xdotool, ydotool, or PowerShell SendKeys depending on platform).
 5. Writes one line per action to `watcher.log`. No notifications, no UI, no focus stealing.
@@ -31,7 +31,7 @@ You never have to type `continue` manually again.
 
 | Platform | Coverage | Injectors |
 |----------|----------|-----------|
-| macOS    | Full     | tmux, AppleScript (iTerm2 / Terminal.app), CodexManager app |
+| macOS    | Full     | tmux, AppleScript (iTerm2 / Terminal.app), ChatGPT app |
 | Linux    | Full with helpers, detection-only otherwise | tmux, xdotool (X11), ydotool (Wayland) |
 | Windows  | Best-effort | PowerShell SendKeys |
 
@@ -132,7 +132,7 @@ Edit `config.json` in the repo:
 | `per_thread_cooldown_seconds` | `60` | Minimum seconds between replies to one session |
 | `max_continues_per_hour` | `20` | Global cap across all sessions |
 | `dry_run` | `false` | Log what it *would* do without injecting |
-| `desktop_app_name` | `"CodexManager"` | Name of the Codex desktop app to target |
+| `desktop_app_name` | `"ChatGPT"` | Name of the Codex desktop app to target |
 | `inject_cli` | `true` | Allow injecting into CLI sessions |
 | `inject_app` | `true` | Allow injecting into the desktop app |
 | `use_tmux` | `true` | Use tmux send-keys when available |
@@ -156,7 +156,7 @@ Bad config or a missing Codex install can never crash-loop the watcher:
 - Corrupt `config.json` (invalid JSON, wrong shape) → falls back to built-in defaults and logs a `WARNING`. If `config.json` is missing entirely, defaults apply with `dry_run: true` (fail-safe: detect-only until you configure it).
 - Missing `~/.codex/logs_2.sqlite` (fresh machine, Codex never ran) → the watcher logs `waiting for …` and retries instead of crashing; `--simulate` exits 1 with a one-line message.
 - Invalid `poll_interval_seconds` (zero, negative, non-numeric) → clamped to the default (0.25s) with a `WARNING`. Zero would otherwise spin at 100% CPU; negative would crash.
-- Missing `desktop_app_name` → defaults to `"CodexManager"`.
+- Missing `desktop_app_name` → defaults to `"ChatGPT"`.
 
 ## Known limitations
 
@@ -183,3 +183,7 @@ Everything the watcher does is recorded in `watcher.log` in the repo:
 ```sh
 ./codex-autocontinue logs
 ```
+
+## Issues
+
+Bug reports, edge cases, and ideas are welcome. Please [open an issue](https://github.com/faithk7/codex-autocontinue/issues/new/choose) — the templates ask for platform, injector, and a few log lines so the report is actually actionable.

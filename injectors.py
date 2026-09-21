@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import time
 from typing import Any, Sequence, Union
 
 from util import CommandResult, WatcherConfig, run
@@ -110,17 +111,81 @@ end run
 APP_SCRIPT = """
 on run argv
     set appName to item 1 of argv
-    set theText to item 2 of argv
     if not (application appName is running) then return "not-running"
     tell application appName to activate
-    delay 0.5
-    tell application "System Events"
-        keystroke theText
-        key code 36
-    end tell
     return "ok"
 end run
 """
+
+# Virtual key 0x24 is Return. Session tap is enough once Accessibility is granted.
+_VK_RETURN = 0x24
+_CG_SESSION_EVENT_TAP = 1
+_CG: tuple[Any, Any] | None = None
+_CG_LOADED = False
+
+
+def _cg() -> tuple[Any, Any] | None:
+    """Lazily load Quartz keyboard-event entry points; None when unavailable."""
+    global _CG, _CG_LOADED
+    if _CG_LOADED:
+        return _CG
+    _CG_LOADED = True
+    _CG = None
+    if sys.platform != "darwin":
+        return None
+    import ctypes
+    try:
+        lib = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/ApplicationServices.framework/"
+            "ApplicationServices")
+        lib.CGEventCreateKeyboardEvent.restype = ctypes.c_void_p
+        lib.CGEventCreateKeyboardEvent.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint16, ctypes.c_bool]
+        lib.CGEventKeyboardSetUnicodeString.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_uint16)]
+        lib.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+        lib.CFRelease.argtypes = [ctypes.c_void_p]
+        _CG = (lib, ctypes)
+    except (OSError, AttributeError):
+        pass
+    return _CG
+
+
+def cgevent_type(text: str, submit: bool = True) -> bool:
+    """Type `text` via CGEvent (Accessibility); Return afterwards when submit.
+
+    Returns False when Quartz is unavailable or an event fails to create.
+    Does not talk to System Events, so it never triggers that Automation dialog.
+    """
+    funcs = _cg()
+    if funcs is None:
+        return False
+    lib, ctypes = funcs
+
+    def _post(keycode: int, down: bool, payload: Any = None) -> bool:
+        ev = lib.CGEventCreateKeyboardEvent(None, keycode, down)
+        if not ev:
+            return False
+        try:
+            if payload is not None:
+                buf, n = payload
+                lib.CGEventKeyboardSetUnicodeString(ev, n, buf)
+            lib.CGEventPost(_CG_SESSION_EVENT_TAP, ev)
+        finally:
+            lib.CFRelease(ev)
+        return True
+
+    if text:
+        encoded = text.encode("utf-16-le")
+        n = len(encoded) // 2
+        buf = (ctypes.c_uint16 * n).from_buffer_copy(encoded)
+        payload = (buf, n)
+        if not _post(0, True, payload) or not _post(0, False, payload):
+            return False
+    if submit:
+        if not _post(_VK_RETURN, True) or not _post(_VK_RETURN, False):
+            return False
+    return True
 
 
 def osascript(script: str, *args: Any) -> CommandResult:
@@ -167,9 +232,12 @@ class MacInjector:
         Returns:
             Short method name on success, None when unsupported.
         """
-        app = self.cfg.get("desktop_app_name", "CodexManager")
-        rc, out, _ = osascript(APP_SCRIPT, app, reply)
-        return "app-keystroke" if rc == 0 and out == "ok" else None
+        app = self.cfg.get("desktop_app_name", "ChatGPT")
+        rc, out, _ = osascript(APP_SCRIPT, app)
+        if rc != 0 or out != "ok":
+            return None
+        time.sleep(0.5)
+        return "app-keystroke" if cgevent_type(reply, submit=True) else None
 
 
 # ---- Linux ---------------------------------------------------------------

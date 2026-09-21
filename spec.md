@@ -13,7 +13,7 @@ The user never has to type `continue` manually again.
 - **Monitor**: continuously watch all running Codex sessions for the "model is at capacity" message.
 - **Auto-continue**: when detected, send `continue` to the affected session automatically.
 - **Coverage** — per platform:
-  - **macOS**: Codex CLI in tmux, iTerm2, Terminal.app; CodexManager desktop app. Full support.
+  - **macOS**: Codex CLI in tmux, iTerm2, Terminal.app; ChatGPT desktop app. Full support.
   - **Linux**: Codex CLI in tmux, or any terminal via xdotool (X11) / ydotool (Wayland). Full when one of those helpers is present; detection-only otherwise.
   - **Windows**: Codex CLI via PowerShell SendKeys. Best-effort.
 - **Graceful degradation**: when no injector is available on a platform, the tool still detects events and logs "type continue yourself" instead of failing.
@@ -43,7 +43,7 @@ doctor       # check macOS permission grants + injector health (--fix re-runs gu
 ```
 
 - Service manager per OS: launchd (macOS), systemd `--user` (Linux), Task Scheduler (Windows). The wrapper picks automatically.
-- On macOS, `install` primes Automation/Accessibility in one guided flow: the daemon fires harmless versions of its real AppleEvents (so Apple's dialogs grant the launchd identity, not the terminal), the installer opens the right Settings panes, waits for the user to click Allow, and verifies each grant. `doctor` re-checks later; `doctor --fix` repairs.
+- On macOS, `install` primes Automation/Accessibility in one guided flow: the daemon fires harmless AppleEvents at iTerm2, Terminal, and ChatGPT (so Apple's dialogs grant the launchd identity, not the terminal), raises Apple's official Accessibility prompt for app keystrokes, the installer opens the right Settings panes, waits for the user to click Allow, and verifies each grant. `doctor` re-checks later; `doctor --fix` repairs.
 - `install` and `uninstall` are exact opposites; reinstalling is always clean.
 - No brew, no pip, no admin/sudo — everything lives in the user-level service directory + the repo.
 

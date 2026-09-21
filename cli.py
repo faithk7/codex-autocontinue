@@ -249,14 +249,45 @@ def _gui_target() -> str:
     return f"gui/{os.getuid()}/{LABEL}"
 
 
+def _darwin_job_loaded() -> bool:
+    """True when launchctl can print the agent (loaded in the gui domain)."""
+    rc, _, _ = run(["launchctl", "print", _gui_target()])
+    return rc == 0
+
+
+def _darwin_bootstrap() -> tuple[bool, str]:
+    """Bootstrap the LaunchAgent; retries EIO from a still-tearing-down job.
+
+    `launchctl bootstrap` returns 5 (Input/output error) when the previous
+    bootout has not finished, or when the job is still in the domain.
+    """
+    domain = f"gui/{os.getuid()}"
+    err = ""
+    for delay in (0.0, 0.2, 0.5, 1.0, 2.0):
+        if delay:
+            time.sleep(delay)
+        rc, _, err = run(["launchctl", "bootstrap", domain, PLIST])
+        if rc == 0:
+            return True, ""
+        low = err.lower()
+        if "already bootstrapped" in low or "already loaded" in low:
+            return True, ""
+        if rc != 5 and "input/output error" not in low:
+            break
+        if _darwin_job_loaded():
+            return True, ""
+    if _darwin_job_loaded():
+        return True, ""
+    return False, err
+
+
 def darwin_install_service() -> tuple[bool, str]:
     """Write the plist and bootstrap it; returns (ok, error)."""
     os.makedirs(os.path.dirname(PLIST), exist_ok=True)
     with open(PLIST, "w") as f:
         f.write(PLIST_TEMPLATE % (LABEL, sys.executable, DAEMON, LOG_PATH, LOG_PATH))
     run(["launchctl", "bootout", _gui_target()])
-    rc, _, e = run(["launchctl", "bootstrap", f"gui/{os.getuid()}", PLIST])
-    return rc == 0, e
+    return _darwin_bootstrap()
 
 
 def darwin_remove_service() -> bool:
@@ -274,7 +305,7 @@ def darwin_start() -> tuple[bool, str]:
     """Bootstrap and kickstart the agent; returns (ok, error)."""
     if not os.path.exists(PLIST):
         return False, "not installed; run: codex-autocontinue install"
-    run(["launchctl", "bootstrap", f"gui/{os.getuid()}", PLIST])
+    _darwin_bootstrap()
     rc, _, e = run(["launchctl", "kickstart", "-k", _gui_target()])
     return rc == 0, e
 
@@ -700,8 +731,7 @@ def guided_prime(cfg: WatcherConfig) -> tuple[dict[str, Any] | None, bool]:
     print(i18n.t("prime.expect"))
     for app in targets:
         line = i18n.t("prime.automation", who=who, app=app)
-        if (running is not None and app != "System Events"
-                and not running.get(app, False)):
+        if running is not None and not running.get(app, False):
             line += i18n.t("prime.not_running")
         bullet(line)
     if wants_ax:
@@ -758,8 +788,23 @@ def guided_prime(cfg: WatcherConfig) -> tuple[dict[str, Any] | None, bool]:
     except (EOFError, KeyboardInterrupt):
         print()
         return permissions.load_state(), False
-    print(i18n.t("prime.verifying"))
-    return permissions.wait_for_state(timeout=30)
+    print()
+    shown = ""
+
+    def on_tick(state: dict[str, Any] | None) -> None:
+        nonlocal shown
+        pending = [_perm_short(k) for k in permissions.pending_targets(state, cfg)]
+        line = (i18n.t("prime.verify_waiting", items=", ".join(pending))
+                if pending else i18n.t("prime.verifying").strip())
+        if line == shown:
+            return
+        print(f"\r  {i18n.pad(line, 72)}", end="", flush=True)
+        shown = line
+
+    on_tick(permissions.load_state())
+    result = permissions.wait_for_state(timeout=5, poll=0.25, on_tick=on_tick)
+    print("\r" + " " * 74 + "\r", end="", flush=True)
+    return result
 
 
 def permission_report(state: dict[str, Any] | None, complete: bool) -> bool:

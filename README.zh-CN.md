@@ -22,7 +22,7 @@
 ## 工作原理
 
 1. 轮询 `~/.codex/logs_2.sqlite`，只处理新产生的 "model is at capacity" 日志（不会处理启动前的历史记录）。
-2. 根据会话的 rollout 文件判断它是 Codex CLI 会话（tmux / iTerm2 / Terminal.app）还是 CodexManager 桌面应用。
+2. 根据会话的 rollout 文件判断它是 Codex CLI 会话（tmux / iTerm2 / Terminal.app）还是 ChatGPT 桌面应用。
 3. 如果会话里已有排队消息，则保持静默——排队的消息自然会驱动会话继续。
 4. 通过 `injectors.py` 把 `continue` 精确输入到对应的会话/窗口（按平台使用 tmux send-keys、AppleScript、xdotool、ydotool 或 PowerShell SendKeys）。
 5. 每次动作只向 `watcher.log` 写一行日志。无通知、无界面、不抢焦点。
@@ -31,7 +31,7 @@
 
 | 平台 | 支持程度 | 注入方式 |
 |------|----------|----------|
-| macOS | 完整支持 | tmux、AppleScript（iTerm2 / Terminal.app）、CodexManager 应用 |
+| macOS | 完整支持 | tmux、AppleScript（iTerm2 / Terminal.app）、ChatGPT 应用 |
 | Linux | 有辅助工具时完整支持，否则仅检测 | tmux、xdotool（X11）、ydotool（Wayland） |
 | Windows | 尽力而为 | PowerShell SendKeys |
 
@@ -130,7 +130,7 @@ doctor         检查 macOS 授权状态与注入方式健康度
 | `per_thread_cooldown_seconds` | `60` | 同一会话两次回复之间的最小间隔 |
 | `max_continues_per_hour` | `20` | 所有会话合计的每小时上限 |
 | `dry_run` | `false` | 只记录"将要做什么"，不实际注入 |
-| `desktop_app_name` | `"CodexManager"` | 目标 Codex 桌面应用名称 |
+| `desktop_app_name` | `"ChatGPT"` | 目标 Codex 桌面应用名称 |
 | `inject_cli` | `true` | 允许向 CLI 会话注入 |
 | `inject_app` | `true` | 允许向桌面应用注入 |
 | `use_tmux` | `true` | 有 tmux 时使用 tmux send-keys |
@@ -154,7 +154,7 @@ doctor         检查 macOS 授权状态与注入方式健康度
 - `config.json` 损坏（非法 JSON、结构错误）→ 回退到内置默认值并记录 `WARNING`。如果 `config.json` 完全缺失，则使用默认值，其中 `dry_run: true`（故障保护：仅检测，直到你完成配置）。
 - 缺失 `~/.codex/logs_2.sqlite`（全新机器，从未运行过 Codex）→ 看守进程记录 `waiting for …` 并重试，而不是崩溃；`--simulate` 会打印一行提示并以状态码 1 退出。
 - 非法的 `poll_interval_seconds`（零、负数、非数字）→ 钳制到默认值（0.25 秒）并记录 `WARNING`。零值会导致 100% CPU 空转，负数会导致崩溃。
-- 缺失 `desktop_app_name` → 默认使用 `"CodexManager"`。
+- 缺失 `desktop_app_name` → 默认使用 `"ChatGPT"`。
 
 ## 已知限制
 
@@ -181,3 +181,7 @@ doctor         检查 macOS 授权状态与注入方式健康度
 ```sh
 ./codex-autocontinue logs
 ```
+
+## 问题反馈
+
+欢迎提交 bug、边界情况和功能建议。请[提交 Issue](https://github.com/faithk7/codex-autocontinue/issues/new/choose)——模板会询问平台、注入方式和几行日志，方便定位问题。

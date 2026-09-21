@@ -204,7 +204,7 @@ def plan_injection(cfg: WatcherConfig, thread_id: str) -> tuple[InjectionPlan | 
         if sys.platform != "win32" and not (pid or tty):
             return None, f"skip {label}: codex process/tty not found"
         return InjectionPlan(thread_id, surface, pid, tty, label), ""
-    label += f" app={cfg.get('desktop_app_name', 'CodexManager')}"
+    label += f" app={cfg.get('desktop_app_name', 'ChatGPT')}"
     return InjectionPlan(thread_id, surface, None, None, label), ""
 
 

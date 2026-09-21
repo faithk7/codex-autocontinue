@@ -46,8 +46,9 @@ def t_detail(detail: str) -> str:
             t("detail.denied_automation"),
         "denied — enable in System Settings > Privacy & Security > Accessibility":
             t("detail.denied_accessibility"),
-        "needs Automation for System Events first": t("detail.needs_system_events"),
         "inject_app is off": t("detail.inject_app_off"),
+        "not granted yet — flip the switch in System Settings":
+            t("detail.ax_pending"),
         "unexpected reply": t("detail.unexpected"),
     }
     if detail in mapped:
@@ -170,8 +171,7 @@ EN: dict[str, str] = {
     "prime.expect": "  Expect one macOS dialog per line — click Allow on each:",
     "prime.automation": 'Automation: "{who}" may control "{app}"',
     "prime.not_running": " (not running — macOS will ask on first real injection)",
-    "prime.accessibility":
-        'Accessibility: turn on "{who}" (appears after System Events is allowed)',
+    "prime.accessibility": 'Accessibility: turn on "{who}"',
     "prime.runs_as": "(watcher runs as {who_path})",
     "prime.restarting": "Restarting watcher...",
     "prime.opening_settings": "Opening System Settings...",
@@ -187,6 +187,7 @@ EN: dict[str, str] = {
         "to verify (q quits instantly)... ",
     "prime.line_verify": "  Type q to quit, or press Enter to verify... ",
     "prime.verifying": "  Verifying...",
+    "prime.verify_waiting": "Verifying... waiting on: {items}",
     "report.header": "Permissions",
     "report.not_primed": "not primed yet — run: codex-autocontinue doctor --fix",
     "report.checked": "checked",
@@ -206,8 +207,9 @@ EN: dict[str, str] = {
         "denied — enable in System Settings > Privacy & Security > Automation",
     "detail.denied_accessibility":
         "denied — enable in System Settings > Privacy & Security > Accessibility",
-    "detail.needs_system_events": "needs Automation for System Events first",
     "detail.inject_app_off": "inject_app is off",
+    "detail.ax_pending":
+        "not granted yet — flip the switch in System Settings",
     "detail.consent_recorded": "consent recorded (probe reply: {reply})",
     "detail.unexpected": "unexpected reply",
 }
@@ -248,8 +250,7 @@ ZH: dict[str, str] = {
     "prime.expect": "  下面每一行对应一个系统对话框，请逐个点「允许」：",
     "prime.automation": "自动化：「{who}」想要控制「{app}」",
     "prime.not_running": "（未在运行 — 首次真正注入时 macOS 才会询问）",
-    "prime.accessibility":
-        "辅助功能：打开「{who}」的开关（允许 System Events 之后才会出现）",
+    "prime.accessibility": "辅助功能：打开「{who}」的开关",
     "prime.runs_as": "（看守运行为 {who_path}）",
     "prime.restarting": "正在重启看守...",
     "prime.opening_settings": "正在打开系统设置...",
@@ -263,6 +264,7 @@ ZH: dict[str, str] = {
         "  请在系统对话框中点「允许」，然后按 Enter 验证（按 q 立即退出）... ",
     "prime.line_verify": "  输入 q 退出，或按 Enter 验证... ",
     "prime.verifying": "  正在验证...",
+    "prime.verify_waiting": "正在验证... 等待：{items}",
     "report.header": "权限",
     "report.not_primed": "尚未预授权 — 请运行：codex-autocontinue doctor --fix",
     "report.checked": "检查时间",
@@ -281,8 +283,8 @@ ZH: dict[str, str] = {
         "已拒绝 — 请在系统设置 > 隐私与安全性 > 自动化 中开启",
     "detail.denied_accessibility":
         "已拒绝 — 请在系统设置 > 隐私与安全性 > 辅助功能 中开启",
-    "detail.needs_system_events": "需要先授予 System Events 的自动化权限",
     "detail.inject_app_off": "inject_app 已关闭",
+    "detail.ax_pending": "尚未授予 — 请在系统设置中打开开关",
     "detail.consent_recorded": "已记录授权（探测回复：{reply}）",
     "detail.unexpected": "意外回复",
 }

@@ -98,7 +98,7 @@ DEFAULT_WATCHER_CONFIG = WatcherConfig(
     max_continues_per_hour=20,
     # Fail-safe: a missing config detects without injecting until configured.
     dry_run=True,
-    desktop_app_name="CodexManager",
+    desktop_app_name="ChatGPT",
     inject_cli=True,
     inject_app=True,
     use_tmux=True,
