@@ -43,7 +43,7 @@ doctor       # check macOS permission grants + injector health (--fix re-runs gu
 ```
 
 - Service manager per OS: launchd (macOS), systemd `--user` (Linux), Task Scheduler (Windows). The wrapper picks automatically.
-- On macOS, `install` primes Automation/Accessibility in one guided flow: the daemon fires harmless versions of its real AppleEvents (so Apple's dialogs grant the launchd identity, not the terminal), the installer opens the right Settings panes, waits for the user to click Allow, and verifies each grant. `doctor` re-checks later; `doctor --fix` repairs.
+- On macOS, `install` primes Automation/Accessibility in one guided burst: the daemon hidden-launches every configured target app (`open -g -j`) and fires harmless versions of its real AppleEvents, so all of Apple's Allow dialogs appear back-to-back (granting the launchd identity, not the terminal), then raises Apple's official Accessibility prompt (`AXIsProcessTrustedWithOptions`) whose button opens Settings with the watcher pre-selected — the only switch to flip. The installer watches the grants land and finishes by itself. `doctor` re-checks later; `doctor --fix` repairs.
 - `install` and `uninstall` are exact opposites; reinstalling is always clean.
 - No brew, no pip, no admin/sudo — everything lives in the user-level service directory + the repo.
 

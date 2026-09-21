@@ -5,9 +5,13 @@ Background (Apple TCC rules):
   The watcher daemon runs under launchd, so priming must run from the daemon
   itself — probing from the install CLI (terminal context) would grant the
   wrong identity and the user would be prompted twice.
-- Nothing can pre-grant (tccutil only resets). The sole trigger is performing
-  the real action, so the probes below are harmless versions of the exact
-  AppleEvents the injectors use.
+- Nothing can pre-grant (tccutil only resets). Automation consent only comes
+  from performing the real action, so the probes below are harmless versions
+  of the exact AppleEvents the injectors use; Accessibility consent is primed
+  through Apple's official AXIsProcessTrustedWithOptions prompt instead.
+- macOS only shows the Automation dialog for a *running* target, so priming
+  launches configured targets hidden (`open -g -j`) first — every Allow
+  dialog fires in one burst at install instead of on first real injection.
 - Results cross from daemon to CLI via permissions.json next to this file.
 """
 
@@ -36,6 +40,14 @@ def _probe_timeout() -> int:
 
 
 PROBE_TIMEOUT = _probe_timeout()
+
+
+def _ax_wait_timeout() -> int:
+    """Accessibility grant wait window from the environment, 180 on garbage."""
+    try:
+        return int(os.environ.get("CODEX_AX_WAIT_TIMEOUT", "180"))
+    except (ValueError, TypeError):
+        return 180
 
 GRANTED = "granted"
 DENIED = "denied"
@@ -91,6 +103,42 @@ def app_is_running(app: str) -> bool:
     return apps_running([app]).get(app, False)
 
 
+def launch_targets_hidden(apps: Sequence[str],
+                          log: Callable[[str], None] | None = None,
+                          settle: float = 5.0) -> None:
+    """Background-launch automation targets so their Allow dialogs fire now.
+
+    macOS only shows the Automation consent dialog for a *running* target, so
+    consent for an app that isn't running would otherwise be deferred to the
+    first real injection — and a missed dialog means manual toggling in
+    Settings. `open -g -j` launches hidden during priming instead, surfacing
+    every dialog in one burst. System Events needs no launch; launch failures
+    (e.g. app not installed) degrade to the usual skipped-not-running state.
+    """
+    say = log or (lambda m: None)
+    if sys.platform != "darwin":
+        return
+    targets = [a for a in apps if a != "System Events"]
+    running = apps_running(targets)
+    launched = []
+    for app in targets:
+        if running.get(app, False):
+            continue
+        rc, _, err = _run(["open", "-g", "-j", "-a", app], 10)
+        if rc == 0:
+            launched.append(app)
+            say(f"launched {app} hidden so its permission dialog can fire now")
+        else:
+            say(f"hidden launch of {app} failed ({err or rc}); will probe as usual")
+    # Give launched apps a moment to report running so probes don't skip them.
+    end = time.time() + settle
+    pending = list(launched)
+    while pending and time.time() < end:
+        time.sleep(0.3)
+        now = apps_running(pending)
+        pending = [a for a in pending if not now.get(a, False)]
+
+
 def probe_automation(app: str, timeout: float | None = None) -> tuple[str, str]:
     """Send a harmless AppleEvent to `app`; returns (state, detail).
 
@@ -132,6 +180,109 @@ def probe_accessibility(timeout: float | None = None) -> tuple[str, str]:
         return BLOCKED, "needs Automation for System Events first"
     short = (err.splitlines() or [""])[0][:100]
     return UNKNOWN, short or "unexpected reply"
+
+
+# ---- Accessibility via Apple's official prompt (AX API, stdlib ctypes) -----
+
+_AX_FUNCS: tuple[Any, Any, Any] | None = None
+_AX_FUNCS_LOADED = False
+
+
+def _ax_funcs() -> tuple[Any, Any, Any] | None:
+    """Lazily load the AX/CF entry points via ctypes; None when unavailable."""
+    global _AX_FUNCS, _AX_FUNCS_LOADED
+    if _AX_FUNCS_LOADED:
+        return _AX_FUNCS
+    _AX_FUNCS_LOADED = True
+    _AX_FUNCS = None
+    if sys.platform != "darwin":
+        return None
+    import ctypes
+    try:
+        asf = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
+        cf = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        asf.AXIsProcessTrusted.restype = ctypes.c_bool
+        asf.AXIsProcessTrusted.argtypes = []
+        asf.AXIsProcessTrustedWithOptions.restype = ctypes.c_bool
+        asf.AXIsProcessTrustedWithOptions.argtypes = [ctypes.c_void_p]
+        cf.CFDictionaryCreate.restype = ctypes.c_void_p
+        cf.CFDictionaryCreate.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
+            ctypes.POINTER(ctypes.c_void_p), ctypes.c_long,
+            ctypes.c_void_p, ctypes.c_void_p]
+        cf.CFRelease.argtypes = [ctypes.c_void_p]
+        _AX_FUNCS = (asf, cf, ctypes)
+    except (OSError, AttributeError):
+        pass
+    return _AX_FUNCS
+
+
+def ax_is_trusted() -> bool | None:
+    """Silent Accessibility trust check; None when the AX API is unavailable."""
+    funcs = _ax_funcs()
+    if funcs is None:
+        return None
+    asf, _, _ = funcs
+    return bool(asf.AXIsProcessTrusted())
+
+
+def prompt_accessibility() -> bool | None:
+    """Raise Apple's official Accessibility prompt once; return trusted state.
+
+    The system dialog's "Open System Settings" button lands on the
+    Accessibility pane with this process already listed, leaving the user
+    exactly one switch to flip. None when the AX API is unavailable (callers
+    fall back to opening the Settings pane themselves).
+    """
+    funcs = _ax_funcs()
+    if funcs is None:
+        return None
+    asf, cf, ctypes = funcs
+    try:
+        key = ctypes.c_void_p.in_dll(asf, "kAXTrustedCheckOptionPrompt")
+        val = ctypes.c_void_p.in_dll(cf, "kCFBooleanTrue")
+    except ValueError:
+        return None
+    keys = (ctypes.c_void_p * 1)(key.value)
+    vals = (ctypes.c_void_p * 1)(val.value)
+    # NULL callbacks: key and value are immortal CF constants, nothing to retain.
+    options = cf.CFDictionaryCreate(None, keys, vals, 1, None, None)
+    if not options:
+        return None
+    try:
+        return bool(asf.AXIsProcessTrustedWithOptions(options))
+    finally:
+        cf.CFRelease(options)
+
+
+def wait_accessibility(timeout: float | None = None, poll: float = 1.0) -> bool:
+    """Silently poll the AX trust check until granted or the timeout expires.
+
+    Runs after prompt_accessibility: the user flips the one switch while this
+    watches, so the grant is recorded without any further user action.
+    """
+    end = time.time() + (timeout if timeout is not None else _ax_wait_timeout())
+    while time.time() < end:
+        trusted = ax_is_trusted()
+        if trusted is not False:
+            return bool(trusted)
+        time.sleep(poll)
+    return ax_is_trusted() is True
+
+
+def _prime_accessibility() -> tuple[str, str]:
+    """Prime Accessibility through Apple's own prompt, then verify by keystroke.
+
+    prompt_accessibility raises the system "control this computer" dialog;
+    while it is up, wait_accessibility polls silently so the grant is caught
+    the moment the switch flips. The keystroke probe has the final word and
+    is also the whole flow when the ctypes AX path is unavailable.
+    """
+    if prompt_accessibility() is False:
+        wait_accessibility()
+    return probe_accessibility()
 
 
 def _save(state: dict[str, Any]) -> None:
@@ -178,6 +329,20 @@ def summarize(state: dict[str, Any] | None) -> tuple[int, int, list[str]]:
     return granted, len(applicable), blocking
 
 
+def pending_targets(state: dict[str, Any] | None, cfg: WatcherConfig) -> list[str]:
+    """Expected target keys not yet in an OK state — the live "waiting on" list.
+
+    Unlike summarize's blocking list this also counts keys the daemon has not
+    probed yet, so the CLI can show what is still in flight during priming.
+    """
+    targets, wants_ax = expected_targets(cfg)
+    expected = [f"automation:{app}" for app in targets]
+    if wants_ax:
+        expected.append("accessibility:keystroke")
+    entries = (state or {}).get("targets", {})
+    return [k for k in expected if entries.get(k, {}).get("state") not in _OK_STATES]
+
+
 def expected_targets(cfg: WatcherConfig) -> tuple[list[str], bool]:
     """(automation target apps, whether the Accessibility keystroke probe applies).
 
@@ -198,12 +363,16 @@ def expected_targets(cfg: WatcherConfig) -> tuple[list[str], bool]:
 def prime_all(cfg: WatcherConfig, log: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Run every applicable probe, saving state after each; returns state.
 
-    Creates the primed marker only when nothing applicable is left denied /
-    blocked / unknown, so undetermined permissions re-prompt on the next
-    daemon start ("until granted") while denied ones just re-fail silently.
+    Hidden-launches the configured target apps first so every Automation Allow
+    dialog fires in one burst (a non-running target's consent would otherwise
+    be deferred to the first real injection). Creates the primed marker only
+    when nothing applicable is left denied / blocked / unknown, so
+    undetermined permissions re-prompt on the next daemon start ("until
+    granted") while denied ones just re-fail silently.
     """
     say = log or (lambda m: None)
     targets, inject_app = expected_targets(cfg)
+    launch_targets_hidden(targets, log=say)
 
     state = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "targets": {}}
     for app in targets:
@@ -218,7 +387,7 @@ def prime_all(cfg: WatcherConfig, log: Callable[[str], None] | None = None) -> d
     elif state["targets"].get("automation:System Events", {}).get("state") != GRANTED:
         ax = (BLOCKED, "needs Automation for System Events first")
     else:
-        ax = probe_accessibility()
+        ax = _prime_accessibility()
     state["targets"]["accessibility:keystroke"] = {"state": ax[0], "detail": ax[1]}
     say(f"prime accessibility:keystroke -> {ax[0]} ({ax[1]})")
     state["done"] = True
@@ -234,24 +403,6 @@ def prime_all(cfg: WatcherConfig, log: Callable[[str], None] | None = None) -> d
     else:
         say("prime incomplete: some permissions still need approval (see doctor)")
     return state
-
-
-def wait_for_state(timeout: float = 30, poll: float = 0.5) -> tuple[dict[str, Any] | None, bool]:
-    """Poll until priming finishes (marker or done flag) or timeout.
-
-    Returns (state, complete); complete is False only when the daemon is
-    still probing (e.g. a dialog sits unanswered past the timeout).
-    """
-    end = time.time() + timeout
-    while time.time() < end:
-        if is_primed():
-            return load_state(), True
-        state = load_state()
-        if state and state.get("done"):
-            return state, True
-        time.sleep(poll)
-    state = load_state()
-    return state, bool(is_primed() or (state and state.get("done")))
 
 
 _PRIVACY_URLS = {

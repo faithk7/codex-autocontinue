@@ -88,7 +88,7 @@ cd codex-autocontinue
 
 To update later: `git pull` in your checkout, then re-run the install script (or `codex-autocontinue start` to restart on the new code). Re-running the one-liner above updates too.
 
-`install` is one-time: it registers the watcher with the OS service manager (launchd on macOS, `systemd --user` on Linux, Task Scheduler on Windows), starts it, puts the command on PATH, and prints any next steps. On macOS it also handles Automation/Accessibility approval in one guided flow — click Allow in the system dialogs when asked and install verifies each grant. It starts at login and restarts automatically if it crashes. No sudo, no brew, no pip.
+`install` is one-time: it registers the watcher with the OS service manager (launchd on macOS, `systemd --user` on Linux, Task Scheduler on Windows), starts it, puts the command on PATH, and prints any next steps. On macOS it also handles Automation/Accessibility approval in one guided burst — every Allow dialog pops up automatically (target apps are launched hidden so none are missed), Apple's Accessibility prompt deep-links to the single switch you need to flip, and install verifies each grant as it lands — no hunting through System Settings. It starts at login and restarts automatically if it crashes. No sudo, no brew, no pip.
 
 ## Usage
 
