@@ -2,11 +2,7 @@
 
 **简体中文** | [English](README.en.md)
 
-一个静默的后台看守工具：每当 Codex 因以下提示停顿时，自动回复 `continue`：
-
-> Selected model is at capacity. Please try a different model.
-
-你再也不用手动输入 `continue` 了。
+后台看守工具：当 Codex 因提示 `Selected model is at capacity. Please try a different model.` 暂停时，自动回复 `continue`，无需手动输入
 
 ## 快速开始
 
@@ -33,7 +29,9 @@ cd codex-autocontinue
 .\install.ps1                # Windows PowerShell
 ```
 
-`install` 只需执行一次：把看守进程注册到系统服务管理器（macOS 用 launchd，Linux 用 `systemd --user`，Windows 用任务计划程序），立即启动，把命令加入 PATH，并打印后续步骤。macOS 上还会引导你完成自动化和辅助功能授权，在系统弹窗里点“允许”就行。程序开机自启，崩溃自动重启，不需要 sudo、brew 或 pip。安装后 PATH 里有 `codex-autocontinue`，也有短得多的 `cxac`，两者命令相同（Windows 用 `cxac.ps1`）。
+`install` 只需跑一次：注册为系统服务（macOS 用 launchd，Linux 用 `systemd --user`，Windows 用任务计划程序），开机自启，崩溃自动重启，并把 `codex-autocontinue` 和更短的 `cxac` 加入 PATH（Windows 用 `cxac.ps1`）
+
+macOS 上会弹出系统授权窗口，点“允许”，全程不需要 sudo、brew、pip
 
 验证：
 
@@ -153,4 +151,4 @@ python3 -m unittest discover -s tests
 
 ## 问题反馈
 
-欢迎报告 bug、边界情况和功能建议。[提交 Issue](https://github.com/faithk7/codex-autocontinue/issues/new/choose)，模板会问你平台、注入方式和几行日志，照着填就行。
+有 bug、边界情况或功能建议，欢迎[提交 Issue](https://github.com/faithk7/codex-autocontinue/issues/new/choose)。模板里填上平台、注入方式和几行日志

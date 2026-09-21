@@ -2,11 +2,7 @@
 
 [简体中文](README.md) | **English**
 
-A silent background watcher that automatically replies `continue` whenever Codex stops with:
-
-> Selected model is at capacity. Please try a different model.
-
-You never have to type `continue` manually again.
+Background watcher: when Codex pauses with `Selected model is at capacity. Please try a different model.`, it automatically replies `continue`, no manual typing needed
 
 ## Quick Start
 
@@ -33,7 +29,7 @@ cd codex-autocontinue
 .\install.ps1                # Windows PowerShell
 ```
 
-`install` is one-time: it registers the watcher with the OS service manager (launchd on macOS, `systemd --user` on Linux, Task Scheduler on Windows), starts it, puts the command on PATH, and prints any next steps. On macOS it also handles Automation/Accessibility approval in one guided flow — click Allow in the system dialogs when asked. It starts at login and restarts automatically if it crashes. No sudo, no brew, no pip. Once installed, the command is on PATH as `codex-autocontinue` — or the much shorter `cxac`, same commands (Windows: `cxac.ps1`).
+`install` only needs to run once: it registers the watcher as a system service (launchd on macOS, `systemd --user` on Linux, Task Scheduler on Windows), starts at login, restarts on crash, and puts `codex-autocontinue` plus the shorter `cxac` on PATH (Windows: `cxac.ps1`). On macOS, click Allow in the system permission dialogs. No sudo, brew, or pip needed
 
 Verify:
 
@@ -155,4 +151,4 @@ python3 -m unittest discover -s tests
 
 ## Issues
 
-Bug reports, edge cases, and ideas are welcome. Please [open an issue](https://github.com/faithk7/codex-autocontinue/issues/new/choose) — the templates ask for platform, injector, and a few log lines so the report is actually actionable.
+Bugs, edge cases, and feature ideas are welcome: [open an issue](https://github.com/faithk7/codex-autocontinue/issues/new/choose). The template asks for platform, injector, and a few log lines
