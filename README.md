@@ -54,13 +54,13 @@ Windows PowerShell 请改用 `irm https://raw.githubusercontent.com/faithk7/code
 ### 验证
 
 ```sh
-codex-autocontinue status
+cxac status
 ```
 
 ### 查看日志
 
 ```sh
-codex-autocontinue logs -n 20
+cxac logs -n 20
 ```
 
 ## 安装
@@ -86,13 +86,15 @@ cd codex-autocontinue
 .\install.ps1                # Windows PowerShell
 ```
 
-后续更新：在仓库目录执行 `git pull`，然后重新运行安装脚本（或执行 `codex-autocontinue start` 重启生效）。重新执行上面的一行命令同样可以更新。
+后续更新：在仓库目录执行 `git pull`，然后重新运行安装脚本（或执行 `cxac start` 重启生效）。重新执行上面的一行命令同样可以更新。
 
 `install` 只需执行一次：它会将看守进程注册到系统服务管理器（macOS 用 launchd，Linux 用 `systemd --user`，Windows 用任务计划程序），立即启动，把命令加入 PATH，并打印后续步骤。在 macOS 上还会一步完成自动化/辅助功能的授权引导——按提示在系统弹窗中点按“允许”，安装程序会逐项验证授权结果。程序开机自启，崩溃后自动重启。无需 sudo、brew 或 pip。
 
+安装完成后，命令 `codex-autocontinue` 会加入 PATH——也可以用短得多的 `cxac`，命令完全相同（Windows 为 `cxac.ps1`）。
+
 ## 使用方法
 
-各平台命令完全一致（`./codex-autocontinue <命令>` 或 `.\codex-autocontinue.ps1 <命令>`）。两个包装脚本只是薄壳——所有命令都由 Python 实现（仅标准库），带彩色输出，并遵循 `NO_COLOR` 与非 TTY 管道场景：
+各平台命令完全一致（安装后用 `cxac <命令>`；在检出目录中用 `./codex-autocontinue <命令>` 或 `.\cxac.ps1 <命令>`）。两个包装脚本只是薄壳——所有命令都由 Python 实现（仅标准库），带彩色输出，并遵循 `NO_COLOR` 与非 TTY 管道场景：
 
 ```
 install        一次性：注册到系统服务管理器、启动、自检、打印后续步骤
@@ -162,7 +164,7 @@ doctor         检查 macOS 授权状态与注入方式健康度
 看守进程的所有动作都记录在仓库下的 `watcher.log`：
 
 ```sh
-./codex-autocontinue logs
+cxac logs
 ```
 
 ## 测试

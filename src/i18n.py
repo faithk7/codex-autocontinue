@@ -155,6 +155,8 @@ EN: dict[str, str] = {
     "install.config": "config",
     "install.logs": "logs",
     "install.logs_cmd": "codex-autocontinue logs",
+    "install.alias": "alias",
+    "install.alias_note": " — same commands, shorter to type",
     "install.next_steps": "Next steps",
     "install.next_dry_run":
         'set "dry_run": false in config.json, then: codex-autocontinue start',
@@ -235,6 +237,8 @@ ZH: dict[str, str] = {
     "install.config": "配置",
     "install.logs": "日志",
     "install.logs_cmd": "codex-autocontinue logs",
+    "install.alias": "别名",
+    "install.alias_note": " — 同样的命令，更短的写法",
     "install.next_steps": "后续步骤",
     "install.next_dry_run":
         '在 config.json 中设置 "dry_run": false，然后执行：codex-autocontinue start',

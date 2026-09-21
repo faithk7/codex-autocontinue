@@ -43,6 +43,7 @@ PLIST = str(Path.home() / "Library" / "LaunchAgents" / (LABEL + ".plist"))
 UNIT = "codex-autocontinue.service"
 UNIT_DIR = str(Path.home() / ".config" / "systemd" / "user")
 BIN_DIR = str(Path.home() / ".local" / "bin")
+ALIAS = "cxac"
 TASK_NAME = "codex-autocontinue"
 
 COMMANDS = ("install", "uninstall", "start", "stop", "status", "logs", "doctor")
@@ -499,14 +500,17 @@ def _login_shell() -> str:
 
 
 def setup_path() -> tuple[str, bool]:
-    """Symlink the wrapper into ~/.local/bin and make sure that dir is on PATH.
+    """Symlink the wrapper (and its `cxac` alias) into ~/.local/bin and make
+    sure that dir is on PATH.
 
     Returns (detail, needs_new_shell)."""
     os.makedirs(BIN_DIR, exist_ok=True)
     dst = os.path.join(BIN_DIR, "codex-autocontinue")
-    if os.path.lexists(dst):
-        os.remove(dst)
-    os.symlink(WRAPPER, dst)
+    for name in ("codex-autocontinue", ALIAS):
+        link = os.path.join(BIN_DIR, name)
+        if os.path.lexists(link):
+            os.remove(link)
+        os.symlink(WRAPPER, link)
     found = shutil.which("codex-autocontinue")
     if found:
         return found, False
@@ -533,12 +537,14 @@ def setup_path() -> tuple[str, bool]:
 
 
 def teardown_path() -> str | None:
-    """Remove the ~/.local/bin symlink. Returns detail string or None."""
-    dst = os.path.join(BIN_DIR, "codex-autocontinue")
-    if os.path.lexists(dst):
-        os.remove(dst)
-        return dst
-    return None
+    """Remove the ~/.local/bin symlinks. Returns detail string or None."""
+    removed = []
+    for name in ("codex-autocontinue", ALIAS):
+        link = os.path.join(BIN_DIR, name)
+        if os.path.lexists(link):
+            os.remove(link)
+            removed.append(link)
+    return ", ".join(removed) if removed else None
 
 
 def rc_files_with_path_line() -> list[str]:
@@ -894,6 +900,7 @@ def cmd_install(args: argparse.Namespace) -> int:
        service_desc() + style(i18n.t("install.starts_at_login"), "dim"))
     kv(i18n.t("install.config"), CONFIG_PATH)
     kv(i18n.t("install.logs"), i18n.t("install.logs_cmd"))
+    kv(i18n.t("install.alias"), ALIAS + style(i18n.t("install.alias_note"), "dim"))
 
     next_steps = []
     if cfg["dry_run"]:

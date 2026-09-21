@@ -54,13 +54,13 @@ On Windows PowerShell, use `irm https://raw.githubusercontent.com/faithk7/codex-
 ### Verify
 
 ```sh
-codex-autocontinue status
+cxac status
 ```
 
 ### Follow logs
 
 ```sh
-codex-autocontinue logs -n 20
+cxac logs -n 20
 ```
 
 ## Install
@@ -86,13 +86,15 @@ cd codex-autocontinue
 .\install.ps1                # Windows PowerShell
 ```
 
-To update later: `git pull` in your checkout, then re-run the install script (or `codex-autocontinue start` to restart on the new code). Re-running the one-liner above updates too.
+To update later: `git pull` in your checkout, then re-run the install script (or `cxac start` to restart on the new code). Re-running the one-liner above updates too.
 
 `install` is one-time: it registers the watcher with the OS service manager (launchd on macOS, `systemd --user` on Linux, Task Scheduler on Windows), starts it, puts the command on PATH, and prints any next steps. On macOS it also handles Automation/Accessibility approval in one guided flow — click Allow in the system dialogs when asked and install verifies each grant. It starts at login and restarts automatically if it crashes. No sudo, no brew, no pip.
 
+Once installed, the command is on PATH as `codex-autocontinue` — or the much shorter `cxac`, same commands. (Windows: `cxac.ps1`.)
+
 ## Usage
 
-Commands are identical on every platform (`./codex-autocontinue <command>` or `.\codex-autocontinue.ps1 <command>`). Both wrappers are thin shims — all commands are implemented in Python (stdlib only) with styled output that respects `NO_COLOR` and non-TTY pipes:
+Commands are identical on every platform (`cxac <command>` once installed; `./codex-autocontinue <command>` or `.\cxac.ps1 <command>` from a checkout). Both wrappers are thin shims — all commands are implemented in Python (stdlib only) with styled output that respects `NO_COLOR` and non-TTY pipes:
 
 ```
 install           one-time: register with the OS service manager, start, self-check,
@@ -164,7 +166,7 @@ Found during testing; documented here so there are no surprises:
 Everything the watcher does is recorded in `watcher.log` in the repo:
 
 ```sh
-./codex-autocontinue logs
+cxac logs
 ```
 
 ## Tests
