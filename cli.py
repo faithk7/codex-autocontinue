@@ -653,13 +653,12 @@ def _perm_short(key: str) -> str:
     return key
 
 
-def _wait_key_or(timeout: float) -> str | None:
-    """One keypress within `timeout` seconds, or None when it expires.
+def _read_key() -> str:
+    """Read one keypress without waiting for Enter (POSIX tty only).
 
     Raises ImportError/OSError/ValueError when raw mode is unavailable so
-    the caller can fall back to plain polling.
+    the caller can fall back to line input.
     """
-    import select
     import termios
     import tty
 
@@ -669,18 +668,13 @@ def _wait_key_or(timeout: float) -> str | None:
         # TCSANOW (not the TCSAFLUSH default): a key pressed just before the
         # prompt appeared must survive, not be discarded with the queue.
         tty.setraw(fd, termios.TCSANOW)
-        ready, _, _ = select.select([fd], [], [], timeout)
-        return sys.stdin.read(1) if ready else None
+        return sys.stdin.read(1)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
 def guided_prime(cfg: WatcherConfig) -> tuple[dict[str, Any] | None, bool]:
-    """Force a daemon-side re-prime and auto-verify Apple's dialogs.
-
-    The daemon surfaces every consent dialog itself (hidden-launching target
-    apps so none are deferred); this walks the user through them with a live
-    "waiting on" status and returns as soon as every grant lands.
+    """Force a daemon-side re-prime and walk through Apple's dialogs.
 
     Args:
         cfg: Active watcher configuration (determines which dialogs to expect).
@@ -702,16 +696,16 @@ def guided_prime(cfg: WatcherConfig) -> tuple[dict[str, Any] | None, bool]:
     t.start()
     t.join(1.5)
     running = probe.get("r")
-    print("  macOS brings every consent to you — approve each dialog as it appears:")
+    print("  Expect one macOS dialog per line — click Allow on each:")
     for app in targets:
-        line = f'Automation: click Allow on "{who}" may control "{app}"'
+        line = f'Automation: "{who}" may control "{app}"'
         if (running is not None and app != "System Events"
                 and not running.get(app, False)):
-            line += " (launched hidden so macOS asks now)"
+            line += " (not running — macOS will ask on first real injection)"
         bullet(line)
     if wants_ax:
-        bullet(f'Accessibility: flip the one switch for "{who}" when the '
-               "system dialog opens Settings for you")
+        bullet(f'Accessibility: turn on "{who}" '
+               "(appears after System Events is allowed)")
     print(f"  {style(f'(watcher runs as {who_path})', 'dim')}")
     print(f"  {style('Restarting watcher...', 'yellow')}", end="", flush=True)
     ok, e = start_service()
@@ -730,45 +724,41 @@ def guided_prime(cfg: WatcherConfig) -> tuple[dict[str, Any] | None, bool]:
         print("    codex-autocontinue doctor")
         return None, False
     print()
-    print("  Watching for your approvals — this finishes by itself once every")
-    print(f"  grant lands {style('(Enter re-checks now, q skips the wait)', 'dim')}")
-    state: dict[str, Any] | None = None
-    while True:
-        state = permissions.load_state()
-        if permissions.is_primed():
-            state = permissions.load_state() or state
-            print("\r" + " " * 78 + "\r", end="", flush=True)
-            return state, True
-        if state and state.get("done"):
-            break  # daemon finished with blockers; the report explains them
-        pending = [_perm_short(k) for k in permissions.pending_targets(state, cfg)]
-        waiting = ("waiting on: " + ", ".join(pending)) if pending \
-            else "watcher is priming..."
-        print(f"\r  {style(waiting.ljust(72), 'yellow')}", end="", flush=True)
-        try:
-            ch = _wait_key_or(1.0)
-        except (ImportError, OSError, ValueError):
-            # No raw mode (odd stdin, non-POSIX): plain polling; Ctrl-C bails.
-            ch = None
+    print("  Click Allow in the macOS dialogs, then press Enter "
+          "to verify (q quits instantly)... ", end="", flush=True)
+    try:
+        while True:
             try:
-                time.sleep(1.0)
-            except KeyboardInterrupt:
+                ch = _read_key()
+            except (ImportError, OSError, ValueError):
+                # No raw mode (odd stdin, non-POSIX): line-input fallback.
+                print()
+                try:
+                    reply = input("  Type q to quit, or press Enter to verify... ")
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    return permissions.load_state(), False
+                if reply.strip().lower() in ("q", "quit"):
+                    print()
+                    return permissions.load_state(), False
                 break
-        except KeyboardInterrupt:
-            break
-        if ch is None:
-            continue
-        if ch in ("q", "Q", "\x03", "\x04", ""):
-            # q, Ctrl+C / Ctrl+D (raw mode delivers them as bytes), EOF.
-            print("\r" + " " * 78 + "\r", end="", flush=True)
-            bullet("priming continues in the background — finish later with:")
-            print("    codex-autocontinue doctor")
-            return state, False
-        if ch in ("\r", "\n"):
-            break
-        # Any other key: ignore and keep waiting.
-    print("\r" + " " * 78 + "\r", end="", flush=True)
-    return state, bool(permissions.is_primed() or (state or {}).get("done"))
+            if ch in ("q", "Q"):
+                print()
+                return permissions.load_state(), False
+            if ch in ("\r", "\n"):
+                print()
+                break
+            if ch in ("\x03", "\x04", ""):
+                # Ctrl+C, Ctrl+D, EOF (raw mode disables ISIG, so Ctrl+C
+                # arrives as a byte instead of raising).
+                print()
+                return permissions.load_state(), False
+            # Any other key: ignore and keep waiting.
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return permissions.load_state(), False
+    print("  Verifying...")
+    return permissions.wait_for_state(timeout=30)
 
 
 def permission_report(state: dict[str, Any] | None, complete: bool) -> bool:
