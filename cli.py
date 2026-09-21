@@ -19,6 +19,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+import i18n
 import permissions
 from util import DEFAULT_WATCHER_CONFIG, CommandResult, WatcherConfig, run, validate_config
 
@@ -103,7 +104,7 @@ def header(text: str) -> None:
 def step(ok: bool, label: str, detail: str = "") -> None:
     """Print an ok/fail checklist line with an optional dim detail."""
     mark = style(_symbol("ok" if ok else "fail"), "green" if ok else "red", "bold")
-    line = f"  {mark} {label.ljust(20)}"
+    line = f"  {mark} {i18n.pad(label, 20)}"
     if detail:
         line += style(detail, "dim")
     print(line)
@@ -111,7 +112,7 @@ def step(ok: bool, label: str, detail: str = "") -> None:
 
 def kv(key: str, value: str) -> None:
     """Print a dim-key plus value row."""
-    print(f"  {style(key.ljust(10), 'dim')}  {value}")
+    print(f"  {style(i18n.pad(key, 10), 'dim')}  {value}")
 
 
 def bullet(text: str) -> None:
@@ -644,12 +645,12 @@ def _watcher_identity() -> tuple[str, str]:
     return name, exe
 
 
-def _perm_short(key: str) -> str:
+def _perm_short(key: str, *, localize: bool = True) -> str:
     """Short display label for a permission target key."""
     if key.startswith("automation:"):
         return key[len("automation:"):]
     if key == "accessibility:keystroke":
-        return "Accessibility"
+        return i18n.t("report.accessibility") if localize else "Accessibility"
     return key
 
 
@@ -682,8 +683,8 @@ def guided_prime(cfg: WatcherConfig) -> tuple[dict[str, Any] | None, bool]:
     Returns (state, complete); state is None when non-interactive (priming
     continues in the background — the caller should point at doctor).
     """
-    header("Permissions")
-    print("  Priming from the running watcher (the identity Apple will ask about)...")
+    header(i18n.t("prime.header"))
+    print(i18n.t("prime.intro"))
     permissions.clear_marker()
     targets, wants_ax = permissions.expected_targets(cfg)
     who, who_path = _watcher_identity()
@@ -696,36 +697,36 @@ def guided_prime(cfg: WatcherConfig) -> tuple[dict[str, Any] | None, bool]:
     t.start()
     t.join(1.5)
     running = probe.get("r")
-    print("  Expect one macOS dialog per line — click Allow on each:")
+    print(i18n.t("prime.expect"))
     for app in targets:
-        line = f'Automation: "{who}" may control "{app}"'
+        line = i18n.t("prime.automation", who=who, app=app)
         if (running is not None and app != "System Events"
                 and not running.get(app, False)):
-            line += " (not running — macOS will ask on first real injection)"
+            line += i18n.t("prime.not_running")
         bullet(line)
     if wants_ax:
-        bullet(f'Accessibility: turn on "{who}" '
-               "(appears after System Events is allowed)")
-    print(f"  {style(f'(watcher runs as {who_path})', 'dim')}")
-    print(f"  {style('Restarting watcher...', 'yellow')}", end="", flush=True)
+        bullet(i18n.t("prime.accessibility", who=who))
+    print(f"  {style(i18n.t('prime.runs_as', who_path=who_path), 'dim')}")
+    print(f"  {style(i18n.t('prime.restarting'), 'yellow')}", end="", flush=True)
     ok, e = start_service()
-    print(f" {style('done', 'green')}" if ok else f" {style('failed', 'red')}")
+    print(f" {style(i18n.t('prime.done'), 'green')}" if ok
+          else f" {style(i18n.t('prime.failed'), 'red')}")
     if not ok:
-        err(e or "could not restart the watcher")
+        err(e or i18n.t("prime.restart_failed"))
         return None, False
-    print(f"  {style('Opening System Settings...', 'yellow')}", end="", flush=True)
+    print(f"  {style(i18n.t('prime.opening_settings'), 'yellow')}",
+          end="", flush=True)
     if permissions.open_settings_panes():
-        print(f" {style('done', 'green')}")
+        print(f" {style(i18n.t('prime.done'), 'green')}")
     else:
-        print(f" {style('skipped (open Privacy & Security manually)', 'dim')}")
+        print(f" {style(i18n.t('prime.settings_skipped'), 'dim')}")
     if not sys.stdin.isatty():
         print()
-        bullet("non-interactive shell: allow the macOS dialogs, then verify with:")
-        print("    codex-autocontinue doctor")
+        bullet(i18n.t("prime.nontty"))
+        print(i18n.t("prime.nontty_cmd"))
         return None, False
     print()
-    print("  Click Allow in the macOS dialogs, then press Enter "
-          "to verify (q quits instantly)... ", end="", flush=True)
+    print(i18n.t("prime.enter_verify"), end="", flush=True)
     try:
         while True:
             try:
@@ -734,7 +735,7 @@ def guided_prime(cfg: WatcherConfig) -> tuple[dict[str, Any] | None, bool]:
                 # No raw mode (odd stdin, non-POSIX): line-input fallback.
                 print()
                 try:
-                    reply = input("  Type q to quit, or press Enter to verify... ")
+                    reply = input(i18n.t("prime.line_verify"))
                 except (EOFError, KeyboardInterrupt):
                     print()
                     return permissions.load_state(), False
@@ -757,25 +758,26 @@ def guided_prime(cfg: WatcherConfig) -> tuple[dict[str, Any] | None, bool]:
     except (EOFError, KeyboardInterrupt):
         print()
         return permissions.load_state(), False
-    print("  Verifying...")
+    print(i18n.t("prime.verifying"))
     return permissions.wait_for_state(timeout=30)
 
 
 def permission_report(state: dict[str, Any] | None, complete: bool) -> bool:
     """Render the daemon-context permission state. True when all applicable granted."""
-    header("Permissions")
+    header(i18n.t("report.header"))
     if not state or not state.get("targets"):
-        bullet("not primed yet — run: codex-autocontinue doctor --fix")
+        bullet(i18n.t("report.not_primed"))
         return False
-    kv("checked", state.get("ts", "?") + style(" · by the running watcher", "dim"))
+    kv(i18n.t("report.checked"),
+       state.get("ts", "?") + style(i18n.t("report.by_watcher"), "dim"))
     for key, entry in state["targets"].items():
         label = _perm_short(key)
         st = entry.get("state", permissions.UNKNOWN)
-        detail = entry.get("detail", "")
+        detail = i18n.t_detail(entry.get("detail", ""))
         if st == permissions.GRANTED:
             step(True, label, detail)
         elif st in (permissions.SKIPPED_RUNNING, permissions.SKIPPED_DISABLED):
-            line = f"  {style(_symbol('bullet'), 'dim')} {label.ljust(20)}"
+            line = f"  {style(_symbol('bullet'), 'dim')} {i18n.pad(label, 20)}"
             if detail:
                 line += style(detail, "dim")
             print(line)
@@ -784,13 +786,13 @@ def permission_report(state: dict[str, Any] | None, complete: bool) -> bool:
     granted, total, blocking = permissions.summarize(state)
     print()
     if blocking:
-        print(f"  {style(f'{granted} of {total} granted', 'yellow', 'bold')}")
-        bullet("allow the remaining dialogs (or enable in System Settings), then:")
-        print("    codex-autocontinue doctor --fix")
+        print(f"  {style(i18n.t('report.granted_partial', granted=granted, total=total), 'yellow', 'bold')}")
+        bullet(i18n.t("report.allow_remaining"))
+        print(i18n.t("report.fix_cmd"))
     else:
-        print(f"  {style(f'All {total} applicable permissions granted.', 'green', 'bold')}")
+        print(f"  {style(i18n.t('report.all_granted', total=total), 'green', 'bold')}")
     if not complete:
-        bullet("priming may still be running — re-check with: codex-autocontinue doctor")
+        bullet(i18n.t("report.still_running"))
     return not blocking
 
 
@@ -807,29 +809,30 @@ def cmd_install(args: argparse.Namespace) -> int:
         Exit status.
     """
     cfg = load_config()
-    header("Installing codex-autocontinue")
+    header(i18n.t("install.header"))
 
     ok, e = install_service()
-    step(ok, "Service registered", service_desc())
+    step(ok, i18n.t("install.service_registered"), service_desc())
     if not ok:
-        err(e or "service registration failed")
+        err(e or i18n.t("install.service_failed"))
         return 1
     pid = service_pid()
-    step(pid is not None, "Watcher started",
-         f"pid {pid}" if pid else "not running yet; check: codex-autocontinue status")
+    step(pid is not None, i18n.t("install.watcher_started"),
+         i18n.t("install.watcher_pid", pid=pid) if pid
+         else i18n.t("install.watcher_not_running"))
 
     if sys.platform == "win32":
         detail, new_shell = win_setup_path()
     else:
         detail, new_shell = setup_path()
-    step(True, "Command on PATH", detail)
+    step(True, i18n.t("install.command_on_path"), detail)
 
     db = os.path.exists(LOGS_DB)
-    step(db, "Codex log database",
-         LOGS_DB if db else "not found yet; run codex once (the watcher waits for it)")
+    step(db, i18n.t("install.codex_db"),
+         LOGS_DB if db else i18n.t("install.db_missing"))
     avail = [name for name, ok, _ in injector_rows(cfg) if ok]
-    step(bool(avail), "Injectors",
-         ", ".join(avail) if avail else "none available; detection-only")
+    step(bool(avail), i18n.t("install.injectors"),
+         ", ".join(avail) if avail else i18n.t("install.injectors_none"))
 
     prime_state = None
     if sys.platform == "darwin":
@@ -838,31 +841,35 @@ def cmd_install(args: argparse.Namespace) -> int:
             permission_report(prime_state, prime_complete)
 
     print()
-    print(style(f"{_symbol('ok')} Installed.", "green", "bold"))
+    print(style(f"{_symbol('ok')} {i18n.t('install.done')}", "green", "bold"))
     if cfg["dry_run"]:
-        kv("mode", style("DRY-RUN", "yellow") + style(" — logs what it would do, injects nothing", "dim"))
+        kv(i18n.t("install.mode"),
+           style("DRY-RUN", "yellow") + style(i18n.t("install.mode_dry"), "dim"))
     else:
-        kv("mode", style("LIVE", "green") + style(f" — replies {cfg['reply']!r} automatically", "dim"))
-    kv("service", service_desc() + style(" (starts at login)", "dim"))
-    kv("config", CONFIG_PATH)
-    kv("logs", "codex-autocontinue logs")
+        kv(i18n.t("install.mode"),
+           style("LIVE", "green")
+           + style(i18n.t("install.mode_live", reply=cfg["reply"]), "dim"))
+    kv(i18n.t("install.service"),
+       service_desc() + style(i18n.t("install.starts_at_login"), "dim"))
+    kv(i18n.t("install.config"), CONFIG_PATH)
+    kv(i18n.t("install.logs"), i18n.t("install.logs_cmd"))
 
     next_steps = []
     if cfg["dry_run"]:
-        next_steps.append('set "dry_run": false in config.json, then: codex-autocontinue start')
+        next_steps.append(i18n.t("install.next_dry_run"))
     if new_shell:
-        next_steps.append("open a new shell so PATH picks up ~/.local/bin" if sys.platform != "win32"
-                          else "open a new shell so the PATH change takes effect")
+        next_steps.append(i18n.t("install.next_new_shell") if sys.platform != "win32"
+                          else i18n.t("install.next_new_shell_win"))
     if sys.platform == "darwin":
         blocking = permissions.summarize(prime_state)[2]
         if prime_state is None or not prime_state.get("targets"):
-            next_steps.append("verify macOS permissions: codex-autocontinue doctor")
+            next_steps.append(i18n.t("install.next_verify_perms"))
         elif blocking:
-            next_steps.append("finish macOS permissions: codex-autocontinue doctor --fix")
+            next_steps.append(i18n.t("install.next_finish_perms"))
     elif sys.platform != "win32" and not avail:
-        next_steps.append("install tmux (best), xdotool (X11) or ydotool (Wayland) to enable injection")
+        next_steps.append(i18n.t("install.next_linux_injectors"))
     if next_steps:
-        header("Next steps")
+        header(i18n.t("install.next_steps"))
         for i, s in enumerate(next_steps, 1):
             print(f"  {i}. {s}")
     print()
@@ -1004,7 +1011,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             kv("permissions", style("not primed", "yellow")
                + style(" · run: codex-autocontinue doctor --fix", "dim"))
         elif blocking:
-            short = ", ".join(_perm_short(k) for k in blocking)
+            short = ", ".join(_perm_short(k, localize=False) for k in blocking)
             kv("permissions", style(f"{granted}/{total} granted", "yellow")
                + style(f" · blocked: {short}", "dim"))
         else:
