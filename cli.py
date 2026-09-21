@@ -1,14 +1,14 @@
 """codex-autocontinue CLI — install/uninstall/start/stop/status/logs/doctor.
 
 Presentation and per-OS service management, stdlib only. The daemon lives in
-codex-autocontinue.py, which dispatches here when argv[1] is a subcommand;
-the bash and PowerShell wrappers are thin shims around this module.
+watcher.py; the hyphenated codex-autocontinue.py shim dispatches here when
+argv[1] is a subcommand. The bash and PowerShell wrappers are thin shims
+around that entry file.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import shutil
@@ -21,13 +21,22 @@ from typing import Any, Callable, Sequence
 
 import i18n
 import permissions
-from util import DEFAULT_WATCHER_CONFIG, CommandResult, WatcherConfig, logs_db, run, validate_config
+from util import (
+    CommandResult,
+    WatcherConfig,
+    config_path,
+    load_config,
+    log_path,
+    logs_db,
+    repo_dir,
+    run,
+)
 
-REPO = os.path.dirname(os.path.abspath(__file__))
+REPO = repo_dir()
 DAEMON = os.path.join(REPO, "codex-autocontinue.py")
 WRAPPER = os.path.join(REPO, "codex-autocontinue")
-CONFIG_PATH = os.path.join(REPO, "config.json")
-LOG_PATH = os.path.join(REPO, "watcher.log")
+CONFIG_PATH = config_path()
+LOG_PATH = log_path()
 
 LABEL = "com.qukai.codex-autocontinue"
 PLIST = str(Path.home() / "Library" / "LaunchAgents" / (LABEL + ".plist"))
@@ -126,19 +135,6 @@ def err(msg: str) -> None:
 
 # ---- shared helpers -------------------------------------------------------
 # run() is imported from util (shared subprocess helper); see util.run.
-
-
-def load_config() -> WatcherConfig:
-    """Full watcher defaults; the CLI reads only the keys it needs."""
-    cfg = dict(DEFAULT_WATCHER_CONFIG)
-    try:
-        with open(CONFIG_PATH) as f:
-            loaded = json.load(f)
-        if isinstance(loaded, dict):
-            cfg = validate_config(loaded)
-    except (OSError, ValueError):
-        pass
-    return cfg
 
 
 def injector_rows(cfg: WatcherConfig) -> list[tuple[str, bool, str]]:
@@ -852,7 +848,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     Returns:
         Exit status.
     """
-    cfg = load_config()
+    cfg = load_config(warn=lambda m: print(f"WARNING: {m}", file=sys.stderr))
     header(i18n.t("install.header"))
 
     ok, e = install_service()
@@ -1025,7 +1021,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     Returns:
         Exit status.
     """
-    cfg = load_config()
+    cfg = load_config(warn=lambda m: print(f"WARNING: {m}", file=sys.stderr))
     pid = service_pid()
     installed = service_installed()
 
@@ -1088,7 +1084,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     Returns:
         Exit status.
     """
-    cfg = load_config()
+    cfg = load_config(warn=lambda m: print(f"WARNING: {m}", file=sys.stderr))
     if sys.platform != "darwin":
         header("codex-autocontinue doctor")
         kv("injectors", injector_summary(cfg))

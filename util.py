@@ -8,6 +8,7 @@ Requires Python 3.8+ (`typing.TypedDict`, `from __future__ import annotations`).
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import subprocess
@@ -63,12 +64,30 @@ def run(
         return CommandResult(1, "", str(e))
 
 
+# ---- repo paths ----------------------------------------------------------
+
+
+def repo_dir() -> str:
+    """Directory containing this checkout (util.py lives at the repo root)."""
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def config_path() -> str:
+    """Path to config.json in the checkout."""
+    return os.path.join(repo_dir(), "config.json")
+
+
+def log_path() -> str:
+    """Path to watcher.log in the checkout."""
+    return os.path.join(repo_dir(), "watcher.log")
+
+
 # ---- Codex state paths ---------------------------------------------------
 
 
 def codex_home() -> str:
-    """Codex state directory; overridable via CODEX_AUTOCONTINUE_HOME."""
-    return os.environ.get("CODEX_AUTOCONTINUE_HOME") or str(Path.home() / ".codex")
+    """Codex state directory; follows CODEX_HOME, else ~/.codex."""
+    return os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")
 
 
 def logs_db() -> str:
@@ -179,4 +198,34 @@ def validate_config(loaded: dict[str, Any],
             cfg[key] = value
         else:
             bad(key, value, want)
+    return cfg
+
+
+def load_config(warn: Callable[[str], None] | None = None) -> WatcherConfig:
+    """Load config.json over the built-in defaults.
+
+    A corrupt file keeps the defaults (with a warning when `warn` is set),
+    a missing file keeps the fail-safe defaults (dry_run on), and
+    individual mistyped keys fall back per-key.
+
+    Args:
+        warn: Called with a message for corrupt files and rejected keys.
+
+    Returns:
+        WatcherConfig safe for the daemon and CLI to consume unguarded.
+    """
+    cfg = dict(DEFAULT_WATCHER_CONFIG)
+    path = config_path()
+    try:
+        with open(path) as f:
+            loaded = json.load(f)
+        if isinstance(loaded, dict):
+            return validate_config(loaded, warn=warn)
+        if warn is not None:
+            warn(f"{path} is not a JSON object; using defaults")
+    except FileNotFoundError:
+        pass
+    except (ValueError, OSError) as e:
+        if warn is not None:
+            warn(f"corrupt {path} ({e}); using defaults")
     return cfg
