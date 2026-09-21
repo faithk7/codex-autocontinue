@@ -1,0 +1,29 @@
+name: Feature or idea
+description: Suggest a change or a new capability
+title: "[Idea]: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. A short description of the problem and what you want instead is enough.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is awkward, missing, or surprising today?
+      placeholder: On Wayland without tmux, injection always goes to the focused window, so I cannot leave Codex in the background.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should the tool do instead? Rough ideas are fine.
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Extra context
+      description: Optional. Platform, injector, or a related issue/PR.

@@ -21,14 +21,13 @@ from typing import Any, Callable, Sequence
 
 import i18n
 import permissions
-from util import DEFAULT_WATCHER_CONFIG, CommandResult, WatcherConfig, run, validate_config
+from util import DEFAULT_WATCHER_CONFIG, CommandResult, WatcherConfig, logs_db, run, validate_config
 
 REPO = os.path.dirname(os.path.abspath(__file__))
 DAEMON = os.path.join(REPO, "codex-autocontinue.py")
 WRAPPER = os.path.join(REPO, "codex-autocontinue")
 CONFIG_PATH = os.path.join(REPO, "config.json")
 LOG_PATH = os.path.join(REPO, "watcher.log")
-LOGS_DB = str(Path.home() / ".codex" / "logs_2.sqlite")
 
 LABEL = "com.qukai.codex-autocontinue"
 PLIST = str(Path.home() / "Library" / "LaunchAgents" / (LABEL + ".plist"))
@@ -872,9 +871,10 @@ def cmd_install(args: argparse.Namespace) -> int:
         detail, new_shell = setup_path()
     step(True, i18n.t("install.command_on_path"), detail)
 
-    db = os.path.exists(LOGS_DB)
+    db_path = logs_db()
+    db = os.path.exists(db_path)
     step(db, i18n.t("install.codex_db"),
-         LOGS_DB if db else i18n.t("install.db_missing"))
+         db_path if db else i18n.t("install.db_missing"))
     avail = [name for name, ok, _ in injector_rows(cfg) if ok]
     step(bool(avail), i18n.t("install.injectors"),
          ", ".join(avail) if avail else i18n.t("install.injectors_none"))

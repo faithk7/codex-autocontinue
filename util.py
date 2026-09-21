@@ -9,7 +9,9 @@ Requires Python 3.8+ (`typing.TypedDict`, `from __future__ import annotations`).
 from __future__ import annotations
 
 import math
+import os
 import subprocess
+from pathlib import Path
 from typing import Any, Callable, NamedTuple, Sequence, TypedDict
 
 
@@ -59,6 +61,24 @@ def run(
         # Bad arguments (empty cmd, negative timeout, ...) report failure
         # instead of raising; KeyboardInterrupt still propagates.
         return CommandResult(1, "", str(e))
+
+
+# ---- Codex state paths ---------------------------------------------------
+
+
+def codex_home() -> str:
+    """Codex state directory; overridable via CODEX_AUTOCONTINUE_HOME."""
+    return os.environ.get("CODEX_AUTOCONTINUE_HOME") or str(Path.home() / ".codex")
+
+
+def logs_db() -> str:
+    """Path to Codex logs_2.sqlite under codex_home()."""
+    return os.path.join(codex_home(), "logs_2.sqlite")
+
+
+def queue_db() -> str:
+    """Path to Codex queue_1.sqlite under codex_home()."""
+    return os.path.join(codex_home(), "queue_1.sqlite")
 
 
 # ---- watcher configuration ------------------------------------------------

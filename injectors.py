@@ -11,7 +11,7 @@ import os
 import shutil
 import sys
 import time
-from typing import Any, Sequence, Union
+from typing import Any, Protocol, Sequence
 
 from util import CommandResult, WatcherConfig, run
 
@@ -358,8 +358,16 @@ class WindowsInjector:
         return None
 
 
-# Any platform injector; duck-typed on inject_cli/inject_app.
-Injector = Union[MacInjector, LinuxInjector, WindowsInjector]
+class Injector(Protocol):
+    """Anything that can type a reply into a CLI session or the desktop app."""
+
+    def inject_cli(self, pid: str | None, tty: str | None, reply: str) -> str | None:
+        """Inject reply into a CLI session; method name or None."""
+        ...
+
+    def inject_app(self, reply: str) -> str | None:
+        """Inject reply into the desktop app; method name or None."""
+        ...
 
 
 def get_injector(cfg: WatcherConfig) -> Injector:

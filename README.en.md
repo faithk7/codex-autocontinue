@@ -116,6 +116,7 @@ Useful daemon flags (rarely needed directly):
 ./codex-autocontinue.py --no-dry-run     # inject for real (overrides config)
 ./codex-autocontinue.py --once           # single poll pass then exit
 ./codex-autocontinue.py --simulate [ID]  # print the injection plan for a thread
+./codex-autocontinue.py --simulate-event # synthetic capacity event in a temp Codex home, dry-run
 ```
 
 ## Configuration
@@ -183,6 +184,16 @@ Everything the watcher does is recorded in `watcher.log` in the repo:
 ```sh
 ./codex-autocontinue logs
 ```
+
+## Tests
+
+Detection and routing are covered by stdlib unit tests that build a fake Codex home (sqlite + rollout) and never touch `~/.codex`:
+
+```sh
+python3 -m unittest discover -s tests
+```
+
+`--simulate-event` does the same dry-run against a synthetic "Selected model is at capacity" log row.
 
 ## Issues
 

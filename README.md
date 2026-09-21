@@ -114,6 +114,7 @@ doctor         检查 macOS 授权状态与注入方式健康度
 ./codex-autocontinue.py --no-dry-run     # 实际注入（覆盖配置文件）
 ./codex-autocontinue.py --once           # 只轮询一次然后退出
 ./codex-autocontinue.py --simulate [ID]  # 打印某个线程的注入计划
+./codex-autocontinue.py --simulate-event # 在临时 Codex 目录中模拟容量事件（只演练）
 ```
 
 ## 配置
@@ -181,6 +182,16 @@ doctor         检查 macOS 授权状态与注入方式健康度
 ```sh
 ./codex-autocontinue logs
 ```
+
+## 测试
+
+检测与路由由标准库单元测试覆盖：在临时目录里构造假的 Codex 状态（sqlite + rollout），不会写入 `~/.codex`：
+
+```sh
+python3 -m unittest discover -s tests
+```
+
+`--simulate-event` 会对一条合成的 "Selected model is at capacity" 日志做同样的演练。
 
 ## 问题反馈
 

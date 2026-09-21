@@ -15,27 +15,32 @@ import json
 import math
 import os
 import random
+import shutil
 import sqlite3
 import sys
+import tempfile
 import threading
 import time
 from collections import deque
-from contextlib import closing, suppress
+from contextlib import closing, contextmanager, suppress
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import cli
 import injectors
 import permissions
-from util import DEFAULT_WATCHER_CONFIG, WatcherConfig, validate_config
+from util import (
+    DEFAULT_WATCHER_CONFIG,
+    WatcherConfig,
+    codex_home,
+    logs_db,
+    queue_db,
+    validate_config,
+)
 
 REPO = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(REPO, "config.json")
 LOG_PATH = os.path.join(REPO, "watcher.log")
-CODEX_DIR = str(Path.home() / ".codex")
-LOGS_DB = os.path.join(CODEX_DIR, "logs_2.sqlite")
-QUEUE_DB = os.path.join(CODEX_DIR, "queue_1.sqlite")
 
 # Rolling window for the global hourly injection cap.
 SECONDS_PER_HOUR = 3600
@@ -43,6 +48,109 @@ SECONDS_PER_HOUR = 3600
 INJECT_JITTER = 0.25
 # Minimum retry delay while waiting for the Codex database to appear.
 DB_WAIT_MIN_DELAY = 5
+
+# Synthetic capacity event used by --simulate-event and tests.
+CAPACITY_BODY = (
+    "Turn error: Selected model is at capacity. Please try a different model."
+)
+SIM_THREAD_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+SIM_PID = "1"
+SIM_TTY = "/dev/ttys001"
+
+_LOGS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    ts_nanos INTEGER NOT NULL,
+    level TEXT NOT NULL,
+    target TEXT NOT NULL,
+    feedback_log_body TEXT,
+    module_path TEXT,
+    file TEXT,
+    line INTEGER,
+    thread_id TEXT,
+    process_uuid TEXT,
+    estimated_bytes INTEGER NOT NULL DEFAULT 0
+)
+"""
+_QUEUE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS queued_items (
+    id TEXT PRIMARY KEY NOT NULL,
+    thread_id TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    queue_order INTEGER NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+)
+"""
+
+
+def connect_logs(home: str) -> sqlite3.Connection:
+    """Open (and create) a fixture logs_2.sqlite under home."""
+    conn = sqlite3.connect(os.path.join(home, "logs_2.sqlite"))
+    conn.execute(_LOGS_SCHEMA)
+    return conn
+
+
+def insert_log_row(
+    conn: sqlite3.Connection,
+    *,
+    body: str,
+    thread_id: str | None,
+    ts: int = 1,
+    process_uuid: str = "pid:1:sim-uuid",
+) -> int:
+    """Insert one logs row and return its id."""
+    cur = conn.execute(
+        "INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body, "
+        "thread_id, process_uuid, estimated_bytes) "
+        "VALUES (?, 0, 'INFO', 'codex_core::session::turn', ?, ?, ?, ?)",
+        (ts, body, thread_id, process_uuid, len(body or "")),
+    )
+    conn.commit()
+    return int(cur.lastrowid or 0)
+
+
+def write_rollout(
+    home: str,
+    thread_id: str,
+    *,
+    source: str = "cli",
+    originator: str = "codex-tui",
+) -> str:
+    """Write a one-line session_meta rollout jsonl and return its path."""
+    day_dir = os.path.join(home, "sessions", "2026", "01", "01")
+    os.makedirs(day_dir, exist_ok=True)
+    path = os.path.join(day_dir, f"rollout-2026-01-01T00-00-00-{thread_id}.jsonl")
+    with open(path, "w") as f:
+        f.write(json.dumps({"payload": {"originator": originator, "source": source}}) + "\n")
+    return path
+
+
+def insert_queued_item(home: str, thread_id: str, item_id: str = "q1") -> None:
+    """Insert one queued_items row so skip_when_queued can fire."""
+    conn = sqlite3.connect(os.path.join(home, "queue_1.sqlite"))
+    conn.execute(_QUEUE_SCHEMA)
+    conn.execute(
+        "INSERT INTO queued_items "
+        "(id, thread_id, payload_json, queue_order, created_at_ms, updated_at_ms) "
+        "VALUES (?, ?, '{}', 1, 0, 0)",
+        (item_id, thread_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+@contextmanager
+def stub_pid_tty(pid: str = SIM_PID, tty: str = SIM_TTY):
+    """Pretend a rollout is held by a live Codex CLI process."""
+    original = injectors.pid_tty_for_rollout
+    injectors.pid_tty_for_rollout = lambda _path: (pid, tty)
+    try:
+        yield
+    finally:
+        injectors.pid_tty_for_rollout = original
+
 
 def load_config() -> WatcherConfig:
     """Load config.json over the built-in defaults.
@@ -99,7 +207,7 @@ def find_rollout(thread_id: str) -> str | None:
         Path to the most recently modified match, or None when absent.
     """
     pattern = os.path.join(
-        CODEX_DIR, "sessions", "*", "*", "*", f"rollout-*-{thread_id}.jsonl"
+        codex_home(), "sessions", "*", "*", "*", f"rollout-*-{thread_id}.jsonl"
     )
     matches = glob.glob(pattern)
     if not matches:
@@ -246,7 +354,7 @@ def handle_capacity(cfg: WatcherConfig, injector: injectors.Injector,
         time.sleep(delay * random.uniform(1 - INJECT_JITTER, 1 + INJECT_JITTER))
 
     if cfg.get("skip_when_queued", True):
-        queued = queued_count(QUEUE_DB, thread_id)
+        queued = queued_count(queue_db(), thread_id)
         if queued > 0:
             log(f"skip {plan.label}: {queued} queued message(s) will drive the session")
             return
@@ -267,19 +375,19 @@ def handle_capacity(cfg: WatcherConfig, injector: injectors.Injector,
 
 def open_db() -> sqlite3.Connection:
     """Open the Codex log database read-only."""
-    return sqlite3.connect(f"file:{LOGS_DB}?mode=ro", uri=True)
+    return sqlite3.connect(f"file:{logs_db()}?mode=ro", uri=True)
 
 
 def wait_for_db(interval: float) -> sqlite3.Connection:
     """Block until the codex log DB exists and opens (fresh machines: codex never ran)."""
     while True:
-        if not os.path.exists(LOGS_DB):
-            log(f"waiting for {LOGS_DB} (run codex once to create it)")
+        if not os.path.exists(logs_db()):
+            log(f"waiting for {logs_db()} (run codex once to create it)")
         else:
             try:
                 return open_db()
             except sqlite3.Error as e:
-                log(f"cannot open {LOGS_DB} ({e}); retrying")
+                log(f"cannot open {logs_db()} ({e}); retrying")
         time.sleep(max(interval, DB_WAIT_MIN_DELAY))
 
 
@@ -365,16 +473,54 @@ def cmd_simulate(cfg: WatcherConfig, injector: injectors.Injector,
     try:
         conn = open_db()
     except sqlite3.Error as e:
-        print(f"no codex log database yet at {LOGS_DB} ({e})")
+        print(f"no codex log database yet at {logs_db()} ({e})")
         return 1
     with closing(conn):
         row = latest_capacity_row(conn, cfg["phrase"], thread_id)
         if not row:
-            print(f"no capacity event found in {LOGS_DB}")
+            print(f"no capacity event found in {logs_db()}")
             return 1
         print(f"simulating against log row id={row[0]} thread={row[2]}")
         handle_capacity(cfg, injector, Limiter(cfg), row, dry_run=True)
     return 0
+
+
+def cmd_simulate_event(cfg: WatcherConfig, injector: injectors.Injector) -> int:
+    """Dry-run handle_capacity against a synthetic capacity event.
+
+    Builds a temp Codex home with a logs_2.sqlite row and a CLI rollout,
+    stubs pid/tty so routing succeeds, and never injects for real.
+
+    Args:
+        cfg: Active watcher configuration.
+        injector: Unused; kept so the call site matches cmd_simulate.
+
+    Returns:
+        Exit status 0 after the dry-run log line is written.
+    """
+    home = tempfile.mkdtemp(prefix="codex-autocontinue-sim-")
+    previous = os.environ.get("CODEX_AUTOCONTINUE_HOME")
+    os.environ["CODEX_AUTOCONTINUE_HOME"] = home
+    try:
+        write_rollout(home, SIM_THREAD_ID)
+        with closing(connect_logs(home)) as conn:
+            row_id = insert_log_row(
+                conn, body=CAPACITY_BODY, thread_id=SIM_THREAD_ID
+            )
+            row = (row_id, 1, SIM_THREAD_ID, "pid:1:sim-uuid")
+        print(
+            f"simulating synthetic capacity event id={row_id} "
+            f"thread={SIM_THREAD_ID} home={home}"
+        )
+        with stub_pid_tty():
+            handle_capacity(cfg, injector, Limiter(cfg), row, dry_run=True)
+        return 0
+    finally:
+        if previous is None:
+            os.environ.pop("CODEX_AUTOCONTINUE_HOME", None)
+        else:
+            os.environ["CODEX_AUTOCONTINUE_HOME"] = previous
+        shutil.rmtree(home, ignore_errors=True)
 
 
 def resolve_interval(cfg: WatcherConfig) -> float:
@@ -456,6 +602,10 @@ def main() -> int:
     parser.add_argument("--once", action="store_true", help="single poll pass then exit")
     parser.add_argument("--simulate", nargs="?", const="", metavar="THREAD_ID",
                         help="print the injection plan for a thread without injecting")
+    parser.add_argument(
+        "--simulate-event", action="store_true",
+        help="dry-run a synthetic capacity event in a temp Codex home",
+    )
     args = parser.parse_args()
 
     cfg = load_config()
@@ -467,6 +617,8 @@ def main() -> int:
 
     injector = injectors.get_injector(cfg)
 
+    if args.simulate_event:
+        return cmd_simulate_event(cfg, injector)
     if args.simulate is not None:
         return cmd_simulate(cfg, injector, args.simulate or None)
     return cmd_watch(cfg, injector, dry_run, args.once)

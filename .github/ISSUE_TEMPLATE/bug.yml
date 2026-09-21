@@ -1,0 +1,68 @@
+name: Bug report
+description: Something did not work as expected
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. Please fill in as much as you can — platform, injector, and a few log lines are usually enough to diagnose.
+
+        If this matches a [known limitation](https://github.com/faithk7/codex-autocontinue/blob/main/README.md#known-limitations), mention that too.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: injector
+    attributes:
+      label: How Codex is running
+      description: The session the watcher should have injected into.
+      options:
+        - tmux
+        - iTerm2
+        - Terminal.app
+        - ChatGPT desktop app
+        - xdotool (Linux/X11)
+        - ydotool (Linux/Wayland)
+        - PowerShell SendKeys (Windows)
+        - Detection-only (no injector available)
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what actually happened.
+      placeholder: The watcher is running, Codex hit the capacity message, but continue was never typed into the tmux pane.
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: `codex-autocontinue status`
+      description: Paste the full output.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: A few lines from `codex-autocontinue logs -n 50` around the event. Redact anything sensitive.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Extra context
+      description: Optional. Config changes, OS version, Codex version, or steps to reproduce.
