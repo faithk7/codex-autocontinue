@@ -8,6 +8,8 @@ A silent background watcher that automatically replies `continue` whenever Codex
 
 You never have to type `continue` manually again.
 
+<p align="center"><img src="docs/capacity-cross.jpeg" alt="Codex stops with 'model is at capacity' over and over" width="720"></p>
+
 ## Features
 
 | Feature               | Description                                                                                                                |
@@ -54,7 +56,7 @@ On Windows PowerShell, use `irm https://raw.githubusercontent.com/faithk7/codex-
 ### Verify
 
 ```sh
-cxac status
+cac status
 ```
 
 Before going live, rehearse with `./codex-autocontinue.py --dry-run` (log-only, no injection) or `./codex-autocontinue.py --simulate-event`. The default is LIVE mode (`dry_run: false`).
@@ -62,7 +64,7 @@ Before going live, rehearse with `./codex-autocontinue.py --dry-run` (log-only, 
 ### Follow logs
 
 ```sh
-cxac logs -n 20
+cac logs -n 20
 ```
 
 ## Install
@@ -88,11 +90,11 @@ cd codex-autocontinue
 .\install.ps1                # Windows PowerShell
 ```
 
-`install` only needs to run once: it registers the watcher with the OS service manager (launchd on macOS, `systemd --user` on Linux, Task Scheduler on Windows), starts it, puts `codex-autocontinue` and the short alias `cxac` on PATH (`cxac.ps1` on Windows), and prints any next steps. On macOS it also handles Automation/Accessibility approval in one guided flow — click Allow in the system dialogs when asked and install verifies each grant. It starts at login and restarts automatically if it crashes. No sudo, no brew, no pip. The service brings its own PATH (including Homebrew locations).
+`install` only needs to run once: it registers the watcher with the OS service manager (launchd on macOS, `systemd --user` on Linux, Task Scheduler on Windows), starts it, puts `codex-autocontinue` and the short alias `cac` on PATH (`cac.ps1` on Windows), and prints any next steps. On macOS it also handles Automation/Accessibility approval in one guided flow — click Allow in the system dialogs when asked and install verifies each grant. It starts at login and restarts automatically if it crashes. No sudo, no brew, no pip. The service brings its own PATH (including Homebrew locations).
 
 ## Usage
 
-Commands are identical on every platform: `cxac <command>` once installed, or `./codex-autocontinue.sh <command>` / `.\cxac.ps1 <command>` inside a checkout. Both wrappers are thin shims — all commands are implemented in Python (stdlib only) with styled output that respects `NO_COLOR` and non-TTY pipes:
+Commands are identical on every platform: `cac <command>` once installed, or `./codex-autocontinue.sh <command>` / `.\cac.ps1 <command>` inside a checkout. Both wrappers are thin shims — all commands are implemented in Python (stdlib only) with styled output that respects `NO_COLOR` and non-TTY pipes:
 
 ```
 install           one-time: register with the OS service manager, start, self-check,

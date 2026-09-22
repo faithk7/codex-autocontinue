@@ -4,6 +4,8 @@
 
 后台看守工具：当 Codex 因提示 `Selected model is at capacity. Please try a different model.` 暂停时，自动回复 `continue`，无需手动输入
 
+<p align="center"><img src="docs/capacity-cross.jpeg" alt="Codex 反复弹出 model is at capacity" width="720"></p>
+
 ## 快速开始
 
 依赖：Python 3（仅标准库，无第三方包）
@@ -29,20 +31,20 @@ cd codex-autocontinue
 .\install.ps1                # Windows PowerShell
 ```
 
-`install` 只需运行一次：注册为系统服务（macOS 用 launchd，Linux 用 `systemd --user`，Windows 用任务计划程序），开机自启，崩溃自动重启，并把 `codex-autocontinue` 和短命令 `cxac` 加入 PATH（Windows 用 `cxac.ps1`）。服务自带 PATH（含 Homebrew 路径）
+`install` 只需运行一次：注册为系统服务（macOS 用 launchd，Linux 用 `systemd --user`，Windows 用任务计划程序），开机自启，崩溃自动重启，并把 `codex-autocontinue` 和短命令 `cac` 加入 PATH（Windows 用 `cac.ps1`）。服务自带 PATH（含 Homebrew 路径）
 
 macOS 上会弹出系统授权窗口，点“允许”，全程不需要 sudo、brew、pip
 
 验证：
 
 ```sh
-cxac status
-cxac logs -n 20
+cac status
+cac logs -n 20
 ```
 
 正式启用前，建议先用 `./codex-autocontinue.py --dry-run`（只记录不注入）或 `./codex-autocontinue.py --simulate-event` 演练一遍。默认为 LIVE 模式（`dry_run: false`）
 
-后续更新：在仓库目录执行 `git pull`，然后重新运行安装脚本（或 `cxac start` 重启生效）。再跑一遍上面的安装命令也行
+后续更新：在仓库目录执行 `git pull`，然后重新运行安装脚本（或 `cac start` 重启生效）。再跑一遍上面的安装命令也行
 
 ## 功能特性
 
@@ -67,7 +69,7 @@ cxac logs -n 20
 
 ## 使用方法
 
-各平台命令完全一致：安装后用 `cxac <命令>`，在检出目录里用 `./codex-autocontinue.sh <命令>` 或 `.\cxac.ps1 <命令>`。两个包装脚本只是入口，实际逻辑都在 Python 里（仅标准库），输出带颜色，遵循 `NO_COLOR` 和非 TTY 管道场景：
+各平台命令完全一致：安装后用 `cac <命令>`，在检出目录里用 `./codex-autocontinue.sh <命令>` 或 `.\cac.ps1 <命令>`。两个包装脚本只是入口，实际逻辑都在 Python 里（仅标准库），输出带颜色，遵循 `NO_COLOR` 和非 TTY 管道场景：
 
 ```
 install        一次性：注册到系统服务管理器、启动、自检、打印后续步骤

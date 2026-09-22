@@ -48,7 +48,8 @@ PLIST = str(Path.home() / "Library" / "LaunchAgents" / (LABEL + ".plist"))
 UNIT = "codex-autocontinue.service"
 UNIT_DIR = str(Path.home() / ".config" / "systemd" / "user")
 BIN_DIR = str(Path.home() / ".local" / "bin")
-ALIAS = "cxac"
+ALIAS = "cac"
+LEGACY_ALIASES = ("cxac",)
 TASK_NAME = "codex-autocontinue"
 
 COMMANDS = ("install", "uninstall", "start", "stop", "status", "logs", "doctor")
@@ -511,7 +512,7 @@ def _login_shell() -> str:
 
 
 def setup_path() -> tuple[str, bool]:
-    """Symlink the wrapper (and its `cxac` alias) into ~/.local/bin and make
+    """Symlink the wrapper (and its `cac` alias) into ~/.local/bin and make
     sure that dir is on PATH.
 
     Returns (detail, needs_new_shell)."""
@@ -522,6 +523,10 @@ def setup_path() -> tuple[str, bool]:
         if os.path.lexists(link):
             os.remove(link)
         os.symlink(WRAPPER, link)
+    for name in LEGACY_ALIASES:
+        stale = os.path.join(BIN_DIR, name)
+        if os.path.lexists(stale):
+            os.remove(stale)
     found = shutil.which("codex-autocontinue")
     if found:
         return found, False
@@ -550,7 +555,7 @@ def setup_path() -> tuple[str, bool]:
 def teardown_path() -> str | None:
     """Remove the ~/.local/bin symlinks. Returns detail string or None."""
     removed = []
-    for name in ("codex-autocontinue", ALIAS):
+    for name in ("codex-autocontinue", ALIAS) + LEGACY_ALIASES:
         link = os.path.join(BIN_DIR, name)
         if os.path.lexists(link):
             os.remove(link)
