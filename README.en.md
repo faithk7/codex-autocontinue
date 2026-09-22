@@ -39,7 +39,7 @@ When no injector is available on a platform, the tool still detects events and l
 
 ## Quick Start
 
-### Prerequisites
+### Dependencies
 
 - Python 3 (standard library only, no third-party packages).
 
@@ -57,7 +57,7 @@ On Windows PowerShell, use `irm https://raw.githubusercontent.com/faithk7/codex-
 cxac status
 ```
 
-Fresh clones start LIVE (`dry_run: false`). Before trusting it, rehearse with `./codex-autocontinue.py --dry-run` (log-only) or `./codex-autocontinue.py --simulate-event`, then watch the log:
+Before going live, rehearse with `./codex-autocontinue.py --dry-run` (log-only, no injection) or `./codex-autocontinue.py --simulate-event`. The default is LIVE mode (`dry_run: false`).
 
 ### Follow logs
 
@@ -67,13 +67,13 @@ cxac logs -n 20
 
 ## Install
 
-One line (macOS / Linux) — clones into `~/.codex-autocontinue` and installs:
+On macOS / Linux, run the command below — it clones into `~/.codex-autocontinue` and installs:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/bootstrap.sh | bash
 ```
 
-One line (Windows PowerShell):
+On Windows PowerShell, use this instead:
 
 ```powershell
 irm https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/bootstrap.ps1 | iex
@@ -82,15 +82,17 @@ irm https://raw.githubusercontent.com/faithk7/codex-autocontinue/main/bootstrap.
 Or clone the repo yourself and install that checkout:
 
 ```sh
+git clone https://github.com/faithk7/codex-autocontinue.git
+cd codex-autocontinue
 ./install.sh                 # macOS / Linux
 .\install.ps1                # Windows PowerShell
 ```
 
-`install` is one-time: it registers the watcher with the OS service manager (launchd on macOS, `systemd --user` on Linux, Task Scheduler on Windows), starts it, puts the command on PATH, and prints any next steps. On macOS it also handles Automation/Accessibility approval in one guided flow — click Allow in the system dialogs when asked and install verifies each grant. It starts at login and restarts automatically if it crashes. No sudo, no brew, no pip. The service sets its own PATH (including Homebrew locations), so helpers reported by `status` are the same ones the daemon can use.
+`install` only needs to run once: it registers the watcher with the OS service manager (launchd on macOS, `systemd --user` on Linux, Task Scheduler on Windows), starts it, puts `codex-autocontinue` and the short alias `cxac` on PATH (`cxac.ps1` on Windows), and prints any next steps. On macOS it also handles Automation/Accessibility approval in one guided flow — click Allow in the system dialogs when asked and install verifies each grant. It starts at login and restarts automatically if it crashes. No sudo, no brew, no pip. The service brings its own PATH (including Homebrew locations).
 
 ## Usage
 
-Commands are identical on every platform (`./codex-autocontinue <command>` or `.\codex-autocontinue.ps1 <command>`). Both wrappers are thin shims — all commands are implemented in Python (stdlib only) with styled output that respects `NO_COLOR` and non-TTY pipes:
+Commands are identical on every platform: `cxac <command>` once installed, or `./codex-autocontinue.sh <command>` / `.\cxac.ps1 <command>` inside a checkout. Both wrappers are thin shims — all commands are implemented in Python (stdlib only) with styled output that respects `NO_COLOR` and non-TTY pipes:
 
 ```
 install           one-time: register with the OS service manager, start, self-check,
@@ -114,6 +116,7 @@ Useful daemon flags (rarely needed directly):
 ./codex-autocontinue.py --no-dry-run     # inject for real (overrides config)
 ./codex-autocontinue.py --once           # single poll pass then exit
 ./codex-autocontinue.py --simulate [ID]  # print the injection plan for a thread
+./codex-autocontinue.py --simulate-event # simulate a capacity event in a temp Codex dir (rehearsal only)
 ```
 
 ## Configuration
@@ -174,15 +177,14 @@ Found during testing; documented here so there are no surprises:
 - **Dry-run reports what live mode would skip.** It runs the same routing, limiter, and queue checks and logs `would skip: <reason>`; only the actual keystroke is withheld.
 - **iTerm2 note:** injection relies on `write text` auto-submitting the line (verified single-submit on iTerm2 3.7.2). If a future iTerm2 stops auto-submitting, CLI replies there would sit unexecuted — please report it.
 
-## Requirements
+## Optional helpers
 
-- Python 3 (standard library only — no third-party packages).
-- Optional helpers depending on platform: `tmux`, `xdotool` (X11), `ydotool` (Wayland), PowerShell (Windows). All optional; the tool degrades to detection-only without them.
+Depending on the platform: `tmux`, `xdotool` (X11), `ydotool` (Wayland), PowerShell (Windows). All optional; the tool degrades to detection-only without them.
 
 ## Logs
 
 Everything the watcher does is recorded in `watcher.log` in the repo:
 
 ```sh
-./codex-autocontinue logs
+./codex-autocontinue.sh logs
 ```
