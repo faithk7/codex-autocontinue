@@ -44,6 +44,13 @@ SECONDS_PER_HOUR = 3600
 INJECT_JITTER = 0.25
 # Minimum retry delay while waiting for the Codex database to appear.
 DB_WAIT_MIN_DELAY = 5
+# Backoff delays (seconds) between retries of a failed inject. A failed
+# first attempt is retried len(RETRY_BACKOFF) times, then dropped with a
+# FAILED log line. Permanent skips (cooldown, cap, queued, disabled) are
+# never retried.
+RETRY_BACKOFF = (5.0, 15.0, 30.0)
+# Upper bound on threads with a pending retry; the oldest is dropped first.
+MAX_PENDING_RETRIES = 20
 
 
 def log(msg: str, console: bool = False) -> None:
@@ -186,7 +193,7 @@ def plan_injection(cfg: WatcherConfig, thread_id: str) -> tuple[InjectionPlan | 
 
 
 def handle_capacity(cfg: WatcherConfig, injector: injectors.Injector,
-                     limiter: Limiter, row: tuple[Any, ...], dry_run: bool) -> None:
+                     limiter: Limiter, row: tuple[Any, ...], dry_run: bool) -> str:
     """Route one capacity event: skip it or inject the reply into its session.
 
     Cheap skips (missing thread, no rollout, limits, inject flags, queued
@@ -198,39 +205,57 @@ def handle_capacity(cfg: WatcherConfig, injector: injectors.Injector,
         injector: Platform injector for this machine.
         limiter: Shared rate limiter.
         row: Log row tuple (id, ts, thread_id, process_uuid).
-        dry_run: Log the injection plan instead of injecting.
+        dry_run: Report would-inject/would-skip instead of injecting.
+
+    Returns:
+        "injected" when the reply went out, "skipped" for every
+        permanent skip (including dry-run plans), "failed" when an
+        inject was attempted but the injector raised or missed.
+        Only "failed" is eligible for the bounded retry queue.
     """
     row_id, _ts, thread_id, _process_uuid = row
     if not thread_id:
         log(f"skip row {row_id}: no thread_id")
-        return
+        return "skipped"
     plan, skip_message = plan_injection(cfg, thread_id)
     if plan is None:
         log(skip_message)
-        return
+        return "skipped"
 
-    if dry_run:
-        log(f"DRY-RUN would inject {cfg['reply']!r} -> {plan.label}", console=True)
-        return
+    def _skip(live_msg: str, dry_reason: str) -> str:
+        """Log a skip, or its dry-run would-skip equivalent."""
+        if dry_run:
+            log(f"DRY-RUN would skip {plan.label}: {dry_reason}", console=True)
+        else:
+            log(live_msg)
+        return "skipped"
 
     ok, reason = limiter.allow(thread_id)
     if not ok:
-        log(f"skip {plan.label}: {reason}")
-        return
+        return _skip(f"skip {plan.label}: {reason}", reason)
 
     if plan.surface == "cli":
         if not cfg["inject_cli"]:
-            log(f"FAILED to inject -> {plan.label} (no injector available; type 'continue' yourself)")
-            return
+            return _skip(
+                f"FAILED to inject -> {plan.label} (no injector available; "
+                "type 'continue' yourself)",
+                "inject_cli is off")
     elif not cfg["inject_app"]:
-        log(f"FAILED to inject -> {plan.label} (no injector available; type 'continue' yourself)")
-        return
+        return _skip(
+            f"FAILED to inject -> {plan.label} (no injector available; "
+            "type 'continue' yourself)",
+            "inject_app is off")
 
     if cfg["skip_when_queued"]:
         queued = queued_count(queue_db(), thread_id)
         if queued > 0:
-            log(f"skip {plan.label}: {queued} queued message(s) will drive the session")
-            return
+            return _skip(
+                f"skip {plan.label}: {queued} queued message(s) will drive the session",
+                f"{queued} queued message(s) will drive the session")
+
+    if dry_run:
+        log(f"DRY-RUN would inject {cfg['reply']!r} -> {plan.label}", console=True)
+        return "skipped"
 
     delay = cfg["response_delay_seconds"]
     if delay > 0:
@@ -243,12 +268,13 @@ def handle_capacity(cfg: WatcherConfig, injector: injectors.Injector,
             method = injector.inject_app(cfg["reply"])
     except Exception as e:
         log(f"FAILED to inject -> {plan.label} ({e})")
-        return
+        return "failed"
     if method:
         limiter.record(thread_id)
         log(f"auto-continue injected via {method} -> {plan.label}")
-    else:
-        log(f"FAILED to inject -> {plan.label} (no injector available; type 'continue' yourself)")
+        return "injected"
+    log(f"FAILED to inject -> {plan.label} (no injector available; type 'continue' yourself)")
+    return "failed"
 
 
 def open_db() -> sqlite3.Connection:
@@ -428,6 +454,68 @@ def resolve_interval(cfg: WatcherConfig) -> float:
     return interval
 
 
+def schedule_retry(pending: dict[str, dict[str, Any]], row: tuple[Any, ...]) -> None:
+    """Queue one failed event for a bounded retry, keyed by thread.
+
+    Args:
+        pending: Live retry queue (thread_id -> entry).
+        row: Log row tuple (id, ts, thread_id, process_uuid) to retry.
+    """
+    thread_id = row[2]
+    if thread_id in pending:
+        return
+    if len(pending) >= MAX_PENDING_RETRIES:
+        oldest = min(pending, key=lambda t: pending[t]["next_try"])
+        log(f"dropping retry for thread {oldest}: retry queue full ({MAX_PENDING_RETRIES})")
+        pending.pop(oldest)
+    pending[thread_id] = {"row": row, "retries_done": 0,
+                          "next_try": time.time() + RETRY_BACKOFF[0]}
+    log(f"will retry thread {thread_id} in {RETRY_BACKOFF[0]:.0f}s "
+        f"(retry 1/{len(RETRY_BACKOFF)})")
+
+
+def process_due_retries(cfg: WatcherConfig, injector: injectors.Injector,
+                        limiter: Limiter, pending: dict[str, dict[str, Any]],
+                        dry_run: bool) -> None:
+    """Re-run handle_capacity for retries whose backoff has expired.
+
+    Each attempt re-resolves the rollout/pid and re-checks limits and
+    queued messages, so a retry can legitimately turn into a skip (e.g.
+    the session got a queued message meanwhile). Entries that keep
+    failing are rescheduled until RETRY_BACKOFF is exhausted.
+
+    Args:
+        cfg: Active watcher configuration.
+        injector: Platform injector for this machine.
+        limiter: Shared rate limiter.
+        pending: Live retry queue (thread_id -> entry).
+        dry_run: Log injection plans instead of injecting.
+    """
+    now = time.time()
+    due = [t for t, entry in pending.items() if entry["next_try"] <= now]
+    for thread_id in due:
+        entry = pending.pop(thread_id)
+        try:
+            status = handle_capacity(cfg, injector, limiter, entry["row"], dry_run)
+        except Exception as e:
+            log(f"FAILED handling retry for thread {thread_id}: {e}")
+            status = "failed"
+        if status != "failed":
+            continue
+        retries_done = entry["retries_done"] + 1
+        if retries_done < len(RETRY_BACKOFF):
+            delay = RETRY_BACKOFF[retries_done]
+            entry["retries_done"] = retries_done
+            entry["next_try"] = now + delay
+            pending[thread_id] = entry
+            log(f"will retry thread {thread_id} in {delay:.0f}s "
+                f"(retry {retries_done + 1}/{len(RETRY_BACKOFF)})")
+        else:
+            log(f"FAILED to inject -> thread={thread_id} "
+                f"(giving up after {len(RETRY_BACKOFF)} retries; "
+                "type 'continue' yourself)")
+
+
 def cmd_watch(cfg: WatcherConfig, injector: injectors.Injector,
               dry_run: bool, once: bool) -> int:
     """Poll the log database and handle capacity events until stopped.
@@ -455,14 +543,21 @@ def cmd_watch(cfg: WatcherConfig, injector: injectors.Injector,
         )
         thread.start()
     limiter = Limiter(cfg)
+    pending: dict[str, dict[str, Any]] = {}
     while True:
         try:
             for row in fetch_new(conn, last_id, cfg["phrase"]):
                 last_id = max(last_id, row[0])
                 try:
-                    handle_capacity(cfg, injector, limiter, row, dry_run)
+                    status = handle_capacity(cfg, injector, limiter, row, dry_run)
                 except Exception as e:
                     log(f"FAILED handling row {row[0]}: {e}")
+                    status = "failed"
+                if status == "failed":
+                    schedule_retry(pending, row)
+                elif status == "injected":
+                    pending.pop(row[2], None)
+            process_due_retries(cfg, injector, limiter, pending, dry_run)
         except sqlite3.Error as e:
             log(f"cannot read {logs_db()} ({e}); reopening")
             with suppress(sqlite3.Error, OSError):

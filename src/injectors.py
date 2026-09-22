@@ -215,7 +215,10 @@ class MacInjector:
                 return method
         if not tty or not self.cfg.get("use_applescript", True):
             return None
-        rc, out, _ = osascript(ITERM_SCRIPT, tty, reply + "\n")
+        # No trailing newline: iTerm2 `write text` already submits the line
+        # (live-probed on iTerm2 3.7.2: bare text executes exactly once, so
+        # reply + "\n" would press Enter twice).
+        rc, out, _ = osascript(ITERM_SCRIPT, tty, reply)
         if out == "ok":
             return "iterm2-write"
         rc, out, _ = osascript(TERMINAL_SCRIPT, tty, reply)

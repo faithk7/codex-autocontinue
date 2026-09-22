@@ -39,6 +39,11 @@ CONFIG_PATH = config_path()
 LOG_PATH = log_path()
 
 LABEL = "com.qukai.codex-autocontinue"
+# PATH baked into the launchd plist and systemd unit. launchd agents and
+# user units do not inherit the interactive shell PATH, so without this the
+# daemon cannot see Homebrew helpers (tmux) that `status` reports as ready.
+SERVICE_PATH = ("/opt/homebrew/bin:/home/linuxbrew/.linuxbrew/bin:"
+                "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
 PLIST = str(Path.home() / "Library" / "LaunchAgents" / (LABEL + ".plist"))
 UNIT = "codex-autocontinue.service"
 UNIT_DIR = str(Path.home() / ".config" / "systemd" / "user")
@@ -217,6 +222,11 @@ PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>%s</string>
+    </dict>
     <key>StandardOutPath</key>
     <string>%s</string>
     <key>StandardErrorPath</key>
@@ -230,6 +240,7 @@ Description=codex-autocontinue watcher
 
 [Service]
 ExecStart=%s %s
+Environment=PATH=%s
 Restart=always
 RestartSec=5
 StandardOutput=append:%s
@@ -281,7 +292,7 @@ def darwin_install_service() -> tuple[bool, str]:
     """Write the plist and bootstrap it; returns (ok, error)."""
     os.makedirs(os.path.dirname(PLIST), exist_ok=True)
     with open(PLIST, "w") as f:
-        f.write(PLIST_TEMPLATE % (LABEL, sys.executable, DAEMON, LOG_PATH, LOG_PATH))
+        f.write(PLIST_TEMPLATE % (LABEL, sys.executable, DAEMON, SERVICE_PATH, LOG_PATH, LOG_PATH))
     run(["launchctl", "bootout", _gui_target()])
     return _darwin_bootstrap()
 
@@ -328,7 +339,7 @@ def linux_install_service() -> tuple[bool, str]:
                          f"{sys.executable} {DAEMON}")
     os.makedirs(UNIT_DIR, exist_ok=True)
     with open(os.path.join(UNIT_DIR, UNIT), "w") as f:
-        f.write(UNIT_TEMPLATE % (sys.executable, DAEMON, LOG_PATH, LOG_PATH))
+        f.write(UNIT_TEMPLATE % (sys.executable, DAEMON, SERVICE_PATH, LOG_PATH, LOG_PATH))
     run(["systemctl", "--user", "daemon-reload"])
     rc, _, e = run(["systemctl", "--user", "enable", "--now", UNIT])
     return rc == 0, e

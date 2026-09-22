@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
-for path in (str(ROOT), str(SRC)):
+for path in (str(ROOT), str(SRC), str(ROOT / "tests")):
     if path not in sys.path:
         sys.path.insert(0, path)
 
@@ -44,6 +44,42 @@ class FakeInjector:
     def inject_app(self, reply: str) -> str | None:
         self.app.append(reply)
         return "fake-app"
+
+
+class NoneInjector:
+    """Injector whose mechanisms all miss (returns None like a real miss)."""
+
+    def inject_cli(self, pid: str | None, tty: str | None, reply: str) -> str | None:
+        return None
+
+    def inject_app(self, reply: str) -> str | None:
+        return None
+
+
+class ExplodingInjector:
+    """Injector that raises on every attempt."""
+
+    def inject_cli(self, pid: str | None, tty: str | None, reply: str) -> str | None:
+        raise RuntimeError("boom")
+
+    def inject_app(self, reply: str) -> str | None:
+        raise RuntimeError("boom")
+
+
+class FlakyInjector:
+    """Injector that misses `fails` times, then succeeds."""
+
+    def __init__(self, fails: int = 1) -> None:
+        self.fails = fails
+        self.calls = 0
+
+    def inject_cli(self, pid: str | None, tty: str | None, reply: str) -> str | None:
+        self.calls += 1
+        return None if self.calls <= self.fails else "fake-cli"
+
+    def inject_app(self, reply: str) -> str | None:
+        self.calls += 1
+        return None if self.calls <= self.fails else "fake-app"
 
 
 class CapacityTests(unittest.TestCase):
@@ -200,6 +236,111 @@ class CapacityTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertGreaterEqual(wait.call_count, 2)
         self.assertTrue(any("reopening" in m for m in self.logs))
+
+    def test_dry_run_reports_would_skip_reasons(self) -> None:
+        helpers.write_rollout(self.home, THREAD)
+        fake = FakeInjector()
+        limiter = watcher.Limiter(_cfg())
+        limiter.record(THREAD)
+        status = watcher.handle_capacity(_cfg(), fake, limiter, self._row(1), True)
+        self.assertEqual(status, "skipped")
+        self.assertTrue(any("DRY-RUN would skip" in m and "thread cooldown" in m
+                            for m in self.logs))
+        status = watcher.handle_capacity(
+            _cfg(inject_cli=False), fake, watcher.Limiter(_cfg()), self._row(2), True)
+        self.assertEqual(status, "skipped")
+        self.assertTrue(any("DRY-RUN would skip" in m and "inject_cli is off" in m
+                            for m in self.logs))
+        helpers.insert_queued_item(self.home, THREAD)
+        status = watcher.handle_capacity(
+            _cfg(), fake, watcher.Limiter(_cfg()), self._row(3), True)
+        self.assertEqual(status, "skipped")
+        self.assertTrue(any("DRY-RUN would skip" in m and "queued message" in m
+                            for m in self.logs))
+        self.assertEqual(fake.cli, [])
+
+    def test_handle_capacity_returns_status(self) -> None:
+        helpers.write_rollout(self.home, THREAD)
+        ok = watcher.handle_capacity(
+            _cfg(), FakeInjector(), watcher.Limiter(_cfg()), self._row(1), False)
+        self.assertEqual(ok, "injected")
+        dry = watcher.handle_capacity(
+            _cfg(), FakeInjector(), watcher.Limiter(_cfg()), self._row(2), True)
+        self.assertEqual(dry, "skipped")
+        missing = watcher.handle_capacity(
+            _cfg(), FakeInjector(), watcher.Limiter(_cfg()),
+            self._row(3, thread_id="22222222-2222-4222-8222-222222222222"), False)
+        self.assertEqual(missing, "skipped")
+        limiter = watcher.Limiter(_cfg())
+        limiter.record(THREAD)
+        cooled = watcher.handle_capacity(_cfg(), FakeInjector(), limiter, self._row(4), False)
+        self.assertEqual(cooled, "skipped")
+        miss = watcher.handle_capacity(
+            _cfg(), NoneInjector(), watcher.Limiter(_cfg()), self._row(5), False)
+        self.assertEqual(miss, "failed")
+        boom = watcher.handle_capacity(
+            _cfg(), ExplodingInjector(), watcher.Limiter(_cfg()), self._row(6), False)
+        self.assertEqual(boom, "failed")
+
+    def test_schedule_retry_dedupes_and_caps(self) -> None:
+        pending: dict[str, dict[str, object]] = {}
+        watcher.schedule_retry(pending, self._row(1))
+        watcher.schedule_retry(pending, self._row(1))
+        self.assertEqual(list(pending), [THREAD])
+        for i in range(watcher.MAX_PENDING_RETRIES):
+            watcher.schedule_retry(pending, self._row(100 + i, thread_id=f"thread-{i}"))
+        self.assertEqual(len(pending), watcher.MAX_PENDING_RETRIES)
+        self.assertNotIn(THREAD, pending)
+        self.assertTrue(any("retry queue full" in m for m in self.logs))
+
+    def test_process_due_retries_gives_up_after_backoff(self) -> None:
+        helpers.write_rollout(self.home, THREAD)
+        pending: dict[str, dict[str, object]] = {}
+        watcher.schedule_retry(pending, self._row(1))
+        limiter = watcher.Limiter(_cfg())
+        for _ in range(len(watcher.RETRY_BACKOFF)):
+            self.assertIn(THREAD, pending)
+            pending[THREAD]["next_try"] = 0.0
+            watcher.process_due_retries(_cfg(), NoneInjector(), limiter, pending, False)
+        self.assertEqual(pending, {})
+        self.assertEqual(limiter.per_thread, {})
+        self.assertTrue(any("giving up after 3 retries" in m for m in self.logs))
+
+    def test_process_due_retries_skips_not_yet_due(self) -> None:
+        helpers.write_rollout(self.home, THREAD)
+        pending: dict[str, dict[str, object]] = {}
+        watcher.schedule_retry(pending, self._row(1))
+        fake = FakeInjector()
+        watcher.process_due_retries(_cfg(), fake, watcher.Limiter(_cfg()), pending, False)
+        self.assertIn(THREAD, pending)
+        self.assertEqual(fake.cli, [])
+
+    def test_retry_success_records_and_clears(self) -> None:
+        helpers.write_rollout(self.home, THREAD)
+        flaky = FlakyInjector(fails=1)
+        limiter = watcher.Limiter(_cfg())
+        status = watcher.handle_capacity(_cfg(), flaky, limiter, self._row(1), False)
+        self.assertEqual(status, "failed")
+        pending: dict[str, dict[str, object]] = {}
+        watcher.schedule_retry(pending, self._row(1))
+        pending[THREAD]["next_try"] = 0.0
+        watcher.process_due_retries(_cfg(), flaky, limiter, pending, False)
+        self.assertEqual(pending, {})
+        self.assertIn(THREAD, limiter.per_thread)
+        self.assertTrue(any("auto-continue injected via fake-cli" in m for m in self.logs))
+
+    def test_cmd_watch_schedules_retry_on_failure(self) -> None:
+        helpers.write_rollout(self.home, THREAD)
+        conn = helpers.connect_logs(self.home)
+        self.addCleanup(conn.close)
+        with patch.object(watcher, "fetch_new",
+                          side_effect=[[(1, 1, THREAD, "pid:1:sim-uuid")]]), \
+             patch.object(watcher, "wait_for_db", return_value=conn), \
+             patch.object(watcher, "max_row_id", return_value=0), \
+             patch.object(watcher.permissions, "is_primed", return_value=True):
+            rc = watcher.cmd_watch(_cfg(), NoneInjector(), False, once=True)
+        self.assertEqual(rc, 0)
+        self.assertTrue(any("will retry thread" in m for m in self.logs))
 
 
 if __name__ == "__main__":

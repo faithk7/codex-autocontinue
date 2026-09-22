@@ -133,7 +133,7 @@ DEFAULT_WATCHER_CONFIG = WatcherConfig(
     poll_interval_seconds=0.25,
     response_delay_seconds=1.0,
     skip_when_queued=True,
-    per_thread_cooldown_seconds=60,
+    per_thread_cooldown_seconds=60.0,
     max_continues_per_hour=20,
     # Fail-safe: a missing config detects without injecting until configured.
     dry_run=True,

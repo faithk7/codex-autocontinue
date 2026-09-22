@@ -29,7 +29,7 @@ cd codex-autocontinue
 .\install.ps1                # Windows PowerShell
 ```
 
-`install` 只需跑一次：注册为系统服务（macOS 用 launchd，Linux 用 `systemd --user`，Windows 用任务计划程序），开机自启，崩溃自动重启，并把 `codex-autocontinue` 和更短的 `cxac` 加入 PATH（Windows 用 `cxac.ps1`）
+`install` 只需跑一次：注册为系统服务（macOS 用 launchd，Linux 用 `systemd --user`，Windows 用任务计划程序），开机自启，崩溃自动重启，并把 `codex-autocontinue` 和更短的 `cxac` 加入 PATH（Windows 用 `cxac.ps1`）。服务会自带 PATH（含 Homebrew 路径），`status` 里显示可用的工具，守护进程同样能用。
 
 macOS 上会弹出系统授权窗口，点“允许”，全程不需要 sudo、brew、pip
 
@@ -40,16 +40,18 @@ cxac status
 cxac logs -n 20
 ```
 
+新克隆默认是 LIVE 模式（`dry_run: false`）。正式启用前，先用 `./codex-autocontinue.py --dry-run`（只记录不注入）或 `./codex-autocontinue.py --simulate-event` 演练一遍，再看日志确认行为符合预期。
+
 后续更新：在仓库目录执行 `git pull`，然后重新运行安装脚本（或 `cxac start` 重启生效）。再跑一遍上面的一行命令也行。
 
 ## 功能特性
 
 | 功能 | 说明 |
 |---|---|
-| 静默运行 | 在后台运行，每次动作只向 `watcher.log` 写一行日志。无通知、无界面、不抢焦点。 |
-| 精确会话路由 | 根据 rollout 文件定位受影响的会话，只向对应的 tmux 面板、终端或桌面应用窗口注入。 |
+| 静默运行 | 在后台运行，每次动作只向 `watcher.log` 写一行日志。无通知、无界面。CLI 注入不抢焦点；桌面应用注入必须先激活应用才能打字（见已知限制）。 |
+| 精确会话路由 | 根据 rollout 文件定位受影响的会话：tmux 面板和终端按 tty 精确匹配；桌面应用、ydotool、Windows 则注入到当前聚焦或第一个匹配的窗口（见已知限制）。 |
 | 队列感知 | 会话已有排队消息时不插手，让排队的消息自己推动继续。 |
-| 速率限制 | 通过单会话冷却和全局每小时上限，避免重复输入。 |
+| 速率限制 | 通过单会话冷却和全局每小时上限，避免重复输入（两者都在内存里，重启后重置）。 |
 | 优雅降级 | 平台无可用注入工具时继续检测，并在日志中提示手动输入。 |
 | 演练模式 | 只记录打算注入什么，不实际发送，适合在正式启用前先验证一遍。 |
 
@@ -120,7 +122,7 @@ doctor         检查 macOS 授权状态与注入方式健康度
 1. 轮询 `~/.codex/logs_2.sqlite`，只处理新产生的 "model is at capacity" 日志（不会处理启动前的历史记录）。
 2. 根据会话的 rollout 文件判断它是 Codex CLI 会话（tmux / iTerm2 / Terminal.app）还是 ChatGPT 桌面应用。
 3. 会话里已有排队消息就不插手，排队的消息自己会让会话继续。
-4. 通过 `src/injectors.py` 把 `continue` 精确输入到对应的会话/窗口（按平台使用 tmux send-keys、AppleScript、xdotool、ydotool 或 PowerShell SendKeys）。
+4. 通过 `src/injectors.py` 把 `continue` 输入到对应的会话（tmux/终端按 tty 精确匹配；桌面应用注入到当前聚焦窗口；详见已知限制）。
 5. 每次动作只向 `watcher.log` 写一行日志。
 
 ## 测试
@@ -146,6 +148,11 @@ python3 -m unittest discover -s tests
 - **`--once` 只能看到它那一轮轮询里写入的行**（启动时就打好了水位），只适合检查链路通不通，不能用来补处理漏掉的事件。
 - **交互式运行只打印到控制台，不写入 `watcher.log`**；只有服务托管运行时才会追加日志。反过来，以服务运行时 `DRY-RUN` 行可能在日志里出现两次（一次直接写文件，一次经由捕获的 stdout）。
 - **`uninstall` 只移除服务和 PATH 项，shell 启动文件里的 `~/.local/bin` 行和 `watcher.log` 会保留**，加 `--purge` 才一并清掉。仓库目录本身始终保留，不需要就手动删掉。
+- **桌面应用注入会先激活应用，再向当前聚焦窗口打字**，会短暂抢焦点；日志里的“已注入”只表示按键已发出——如果中途有别的窗口抢走焦点，回复可能进错地方。CLI 注入（tmux / iTerm2 / Terminal）精确且不抢焦点。
+- **只有注入失败会重试，其余跳过都是一次性的。** 注入器报错或没找到目标时最多重试 3 次（退避 5 秒 / 15 秒 / 30 秒）；冷却、上限、有排队消息、注入被禁用等跳过会直接消费该事件，不重试。
+- **冷却和每小时上限只存在内存里**，看守重启后重置；重启后的第一个新事件会立即注入（重启前的历史记录仍然不会补处理）。
+- **演练模式会如实报告正式模式下会被跳过的事件**：它跑同样的路由、限流和队列检查并记录 `would skip：原因`，只是不真正按键。
+- **iTerm2 说明：** 注入依赖 `write text` 自动回车（已在 iTerm2 3.7.2 上验证只提交一次）。如果未来版本不再自动回车，那里的 CLI 回复会停在输入框不执行，欢迎反馈。
 
 </details>
 
