@@ -4,7 +4,7 @@
 
 后台看守工具：当 Codex 因提示 `Selected model is at capacity. Please try a different model.` 暂停时，自动回复 `continue`，无需手动输入
 
-<p align="center"><img src="docs/capacity-cross.jpeg" alt="Codex 反复弹出 model is at capacity" width="720"></p>
+<p align="center"><img src="docs/capacity-cross.jpeg" alt="Codex 反复弹出 model is at capacity" width="100%"></p>
 
 ## 快速开始
 
@@ -160,4 +160,4 @@ python3 -m unittest discover -s tests
 
 ## 问题反馈
 
-有 bug、边界情况或功能建议，欢迎[提交 Issue](https://github.com/faithk7/codex-autocontinue/issues/new/choose)。模板里填上平台、注入方式和几行日志
+有 bug、边界情况或功能建议，欢迎提交 Issue

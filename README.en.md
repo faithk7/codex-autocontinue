@@ -8,7 +8,7 @@ A silent background watcher that automatically replies `continue` whenever Codex
 
 You never have to type `continue` manually again.
 
-<p align="center"><img src="docs/capacity-cross.jpeg" alt="Codex stops with 'model is at capacity' over and over" width="720"></p>
+<p align="center"><img src="docs/capacity-cross.jpeg" alt="Codex stops with 'model is at capacity' over and over" width="100%"></p>
 
 ## Features
 
